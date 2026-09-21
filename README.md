@@ -27,10 +27,10 @@ vivo, para quem está ajudando no diagnóstico ver acontecendo.
 - **Direto, baixa o APK na hora:** <https://tinyurl.com/impulsevt>
 - **Página com o passo a passo:** <https://rafaelcs28.github.io/impulse-vidros-travas/>
 
-É uma página com o botão de instalar e o passo a passo. O botão aponta para
-`releases/latest/download/impulse-vidros-travas.apk`, que o GitHub resolve sempre para a versão mais
-recente — por isso o link continua valendo quando sai uma correção, sem precisar avisar ninguém.
-Para isso funcionar, **toda release precisa anexar o arquivo com este mesmo nome**.
+Os dois apontam para `releases/latest/download/impulse-vidros-travas.apk`, que o GitHub resolve
+sempre para a versão mais recente — por isso o link continua valendo quando sai uma correção, sem
+precisar avisar ninguém. Para isso funcionar, **toda release precisa anexar o arquivo com este mesmo
+nome**.
 
 ## Como usar
 
