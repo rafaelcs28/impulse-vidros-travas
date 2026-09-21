@@ -39,16 +39,6 @@ class CaptureService : Service() {
     private val fila = LinkedBlockingQueue<String>()
     private var enviando = true
 
-    /**
-     * Quantas linhas do arquivo ja foram aceitas pelo canal.
-     *
-     * A fila de envio vive na memoria, e o carro desligando mata o processo com ela cheia. O
-     * arquivo nunca perde nada, mas o canal perdia tudo que estivesse na fila - foi assim que um
-     * teste de cinco ciclos chegou aqui com um. Guardando quanto ja saiu, a proxima abertura
-     * retoma de onde parou em vez de recomecar do zero ou esquecer o resto.
-     */
-    private var linhasEscritas = 0L
-    private var linhasEnviadas = 0L
     private lateinit var arquivo: File
 
     /**
@@ -80,6 +70,73 @@ class CaptureService : Service() {
         /** Ritmo do envio ao vivo. Sobe sozinho quando o servidor recusa, volta quando aceita. */
         private const val INTERVALO_MIN_MS = 2000L
         private const val INTERVALO_MAX_MS = 30000L
+
+        /**
+         * Chaves que nao entram nem no arquivo.
+         *
+         * Duas razoes distintas, na mesma lista. A primeira e volume: medindo as capturas reais,
+         * `battery_voltage` sozinha era 80% de todas as mudancas, e o assunto - vidros, teto,
+         * portas, tranca, retrovisor - nao chega a 5%. Sao grandezas analogicas que mudam varias
+         * vezes por segundo e nao dizem nada sobre o que se investiga; guardadas, transformam um
+         * registro de minutos num arquivo de quatro megabytes que nao se consegue enviar.
+         *
+         * A segunda e privacidade: `vin_code` e o chassi inteiro. Deste aplicativo sai so o final,
+         * que serve de etiqueta; o numero completo nao pode nem ser gravado.
+         *
+         * O retrato de abertura continua registrando as analogicas, porque uma leitura unica nao
+         * custa nada e da o ponto de partida. O chassi nao: esse fica de fora em todo lugar.
+         */
+        private val SEGREDO = setOf("car.basic.vin_code")
+
+        private val RUIDO = SEGREDO + setOf(
+            "car.basic.battery_voltage",
+            "car.basic.engine_speed",
+            "car.basic.vehicle_speed",
+            "car.basic.vehicle_speed_since_reset",
+            "car.basic.avg_vehicle_speed_since_startup",
+            "car.basic.steering_wheel_angle",
+            "car.basic.inside_temp",
+            "car.basic.outside_temp",
+            "car.basic.coolant_temp",
+            "car.basic.transmission_oil_temp",
+            "car.basic.instant_fuel_consumption",
+            "car.basic.avg_fuel_consumption",
+            "car.basic.cur_journey_avg_fuel_consume",
+            "car.basic.remain_fuel_percentage",
+            "car.basic.accumulated_odometer",
+            "car.basic.cur_journey_odometer",
+            "car.basic.remain_odometer",
+            "car.basic.total_odometer",
+            "car.ev_info.total_odometer",
+            "car.ev_info.electric_mode_remain_odometer",
+            "car.ev_info.fuel_mode_remain_odometer",
+            "car.ev_info.cur_charge_current",
+            "car.ev_info.power_battery_current",
+            "car.ev_info.power_battery_voltage",
+            "car.ev_info.phev_ahd_voltage",
+            "car.ev_info.motor_speed",
+            "car.ev_info.rear_motor_speed",
+            "car.ev_info.soc_of_battery",
+            "car.ev_info.charge_remaining_time",
+            "car.ev_info.economic_guide_range",
+            "car.ev_info.energy_consume_info",
+            "car.ev_info.energy_output_percentage",
+            "car.ev_info.energy_recovery_info",
+            "car.ev_info.fuel_consume_info",
+            "car.ev_info.cycle_energy_consume_info",
+            "car.ev_info.cycle_fuel_consume_info",
+            "car.ev_info.avg_energy_consume_info_since_reset",
+            "car.ev_info.avg_energy_consume_info_since_startup",
+            // Estas sairam da medicao do arquivo completo de um carro, nao de palpite: sozinhas
+            // valiam outros 11% do volume. Com elas na lista, o registro de uma tarde inteira cai
+            // de 4,6 MB para 0,15 MB.
+            "car.ev_info.economic_guide_level",
+            "car.ev_info.energy_drive_state",
+            "car.off_road_setting.tab_effect_display",
+            "car.ipk_info.bsd_lca_warning_reqleft",
+            "car.ipk_info.bsd_lca_warning_reqright",
+            "car.intelligent_driving_info.tja_ica_state"
+        )
 
         /** O que vale acompanhar ao vivo quando o retrato inteiro nao cabe no canal. */
         private val INTERESSE = listOf(
@@ -184,20 +241,88 @@ class CaptureService : Service() {
         var estado: String = "parado"
             private set
 
-        /** Quanto ainda falta sair para o canal. Zero com pedido atendido significa entregue. */
+        /**
+         * Estado do envio sob demanda, que e o unico com inicio e fim definidos.
+         *
+         * O fluxo ao vivo nunca acaba - o carro nao para de publicar - entao ele nao serve para
+         * dizer "enviado". O botao fixa um alvo: as linhas que o arquivo tinha no momento do toque.
+         * Assim a tela conta para baixo e a confirmacao significa alguma coisa.
+         */
         @Volatile
-        var pendentes: Int = 0
+        var envioAtivo: Boolean = false
+            private set
+
+        @Volatile
+        var envioAlvo: Int = 0
+            private set
+
+        @Volatile
+        var envioFeito: Int = 0
+            private set
+
+        @Volatile
+        var envioRecusas: Int = 0
+            private set
+
+        @Volatile
+        var envioConcluidoEm: Long = 0L
+            private set
+
+        /** Motivo da falha, para a tela poder dizer o que houve em vez de um "nao deu". */
+        @Volatile
+        var envioFalha: String = ""
             private set
 
         /**
-         * Quando o canal recusou pela ultima vez.
+         * Sobe o arquivo inteiro numa requisicao so, como anexo.
          *
-         * Existe para a tela so poder dizer "enviado" quando realmente foi: sem isto, fila vazia
-         * seria confundida com entrega, inclusive depois de uma recusa que apenas adiou o envio.
+         * Mandar linha a linha pelo canal nao fecha: medido num carro, 29.935 linhas e 3,9 MB
+         * depois de uma tarde ligado dariam mais de mil envios com limite de taxa no meio. Como
+         * anexo e um pedido unico, e a resposta dele ja diz se deu certo - o que torna a
+         * confirmacao na tela honesta em vez de otimista.
          */
-        @Volatile
-        var ultimaRecusaMs: Long = 0L
-            private set
+        fun subirArquivo(arquivo: File, nome: String, progresso: (Int) -> Unit): String? {
+            var conn: HttpURLConnection? = null
+            return try {
+                conn = URL("https://ntfy.sh/" + CANAL).openConnection() as HttpURLConnection
+                conn.requestMethod = "PUT"
+                conn.doOutput = true
+                conn.connectTimeout = 15000
+                conn.readTimeout = 120000
+                conn.setRequestProperty("Filename", nome)
+                conn.setRequestProperty("Title", "Captura " + nome)
+                conn.setFixedLengthStreamingMode(arquivo.length())
+                conn.outputStream.use { saida ->
+                    arquivo.inputStream().use { entrada ->
+                        val buffer = ByteArray(16 * 1024)
+                        var total = 0
+                        while (true) {
+                            val lidos = entrada.read(buffer)
+                            if (lidos <= 0) break
+                            saida.write(buffer, 0, lidos)
+                            total += lidos
+                            progresso(total)
+                        }
+                    }
+                }
+                val codigo = conn.responseCode
+                if (codigo in 200..299) {
+                    null
+                } else {
+                    val detalhe = try {
+                        conn.errorStream?.bufferedReader()?.readText()?.take(160).orEmpty()
+                    } catch (e: Exception) {
+                        ""
+                    }
+                    "servidor respondeu " + codigo + (if (detalhe.isNotEmpty()) ": " + detalhe else "")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "envio do arquivo falhou", e)
+                (e.message ?: e.javaClass.simpleName)
+            } finally {
+                conn?.disconnect()
+            }
+        }
 
         @Volatile
         private var pedidoDeReenvio = false
@@ -237,7 +362,6 @@ class CaptureService : Service() {
         etiquetaVisivel = etiqueta
         emPrimeiroPlano()
         Thread({ remetente() }, "envio").apply { isDaemon = true }.start()
-        Thread({ retomar() }, "retomada").apply { isDaemon = true }.start()
         Thread({ atenderReenvios() }, "reenvio").apply { isDaemon = true }.start()
         Thread({ conectarComInsistencia() }, "conexao").apply { isDaemon = true }.start()
     }
@@ -245,65 +369,52 @@ class CaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     /**
-     * Reenfileira o que o arquivo tem e o canal ainda nao recebeu.
+     * Entrega o arquivo inteiro quando a tela pede, com alvo fixo e fim reconhecivel.
      *
-     * O caso que motivou isto: a pessoa fez cinco ciclos de tranca, o carro desligou, e so o
-     * primeiro tinha chegado - o resto morreu na fila junto com o processo. O arquivo tinha tudo.
-     * Agora a abertura seguinte empurra o atraso em vez de deixa-lo so no aparelho dela.
-     */
-    private fun retomar() {
-        try {
-            val prefs = getSharedPreferences("captura", Context.MODE_PRIVATE)
-            linhasEnviadas = prefs.getLong("linhas_enviadas", 0L)
-            if (!arquivo.exists()) return
-            val todas = arquivo.readLines()
-            linhasEscritas = todas.size.toLong()
-            if (linhasEnviadas > linhasEscritas) {
-                // Arquivo menor que o marcador significa que ele foi embora (reinstalacao limpa).
-                linhasEnviadas = 0L
-            }
-            val atraso = todas.drop(linhasEnviadas.toInt())
-            if (atraso.isEmpty()) return
-            // Teto para nao encher a memoria com um atraso enorme: o arquivo continua completo e
-            // o botao de compartilhar entrega o resto.
-            val enviar = if (atraso.size > ATRASO_MAX) atraso.takeLast(ATRASO_MAX) else atraso
-            if (enviar.size < atraso.size) linhasEnviadas += (atraso.size - enviar.size)
-            anotar("retomada", mapOf(
-                "pendentes" to atraso.size.toString(),
-                "reenviando" to enviar.size.toString()
-            ))
-            for (linha in enviar) fila.offer(linha)
-        } catch (e: Exception) {
-            Log.w(TAG, "retomada falhou", e)
-        }
-    }
-
-    /**
-     * Reenvia o arquivo inteiro quando a tela pede.
-     *
-     * O botao existe porque no carro nao ha para onde "compartilhar": a central nao tem aplicativo
-     * de mensagem, e o seletor do Android acabava oferecendo qualquer coisa instalada. Em vez de
-     * empurrar o arquivo para outro aplicativo, ele reenvia pelo caminho que ja funciona e a tela
-     * so diz "enviado" quando a ultima linha foi aceita.
+     * No carro nao ha para onde "compartilhar": a central nao tem aplicativo de mensagem e o
+     * seletor do Android acabava abrindo a loja. Entao o botao manda pelo caminho que ja funciona.
+     * O alvo e travado no momento do toque, e nao acompanha o que o carro continua publicando: sem
+     * isso a conta so cresceria e a confirmacao nunca chegaria.
      */
     private fun atenderReenvios() {
         while (enviando) {
             try {
-                if (consumirPedidoDeReenvio()) {
-                    linhasEnviadas = 0L
-                    getSharedPreferences("captura", Context.MODE_PRIVATE).edit()
-                        .putLong("linhas_enviadas", 0L).apply()
-                    val todas = if (arquivo.exists()) arquivo.readLines() else emptyList()
-                    val enviar = if (todas.size > ATRASO_MAX) todas.takeLast(ATRASO_MAX) else todas
-                    if (enviar.size < todas.size) linhasEnviadas = (todas.size - enviar.size).toLong()
-                    for (linha in enviar) fila.offer(linha)
-                    pendentes = fila.size
+                if (!consumirPedidoDeReenvio()) {
+                    Thread.sleep(500)
+                    continue
                 }
-                Thread.sleep(1000)
+                envioFeito = 0
+                envioRecusas = 0
+                envioFalha = ""
+                envioConcluidoEm = 0L
+                envioAlvo = if (arquivo.exists()) arquivo.length().toInt() else 0
+                envioAtivo = true
+                if (envioAlvo == 0) {
+                    envioAtivo = false
+                    envioConcluidoEm = System.currentTimeMillis()
+                    continue
+                }
+
+                // Uma requisicao so, com o arquivo como anexo. Medido no carro: 29.935 linhas e
+                // 3,9 MB depois de uma tarde ligado. Em pedaços de dois quilobytes isso daria mil e
+                // quinhentos envios com limite de taxa no meio - mais de uma hora, na melhor das
+                // hipoteses, e a pessoa olhando um numero que nao acaba.
+                val nome = "captura-" + etiqueta + ".ndjson"
+                val erro = subirArquivo(arquivo, nome) { enviados -> envioFeito = enviados }
+                if (erro == null) {
+                    envioFeito = envioAlvo
+                } else {
+                    envioFalha = erro
+                    envioRecusas++
+                }
+                envioAtivo = false
+                envioConcluidoEm = System.currentTimeMillis()
             } catch (e: InterruptedException) {
+                envioAtivo = false
                 return
             } catch (e: Exception) {
-                Log.w(TAG, "reenvio falhou", e)
+                Log.w(TAG, "envio sob demanda falhou", e)
+                envioAtivo = false
                 try { Thread.sleep(2000) } catch (i: InterruptedException) { return }
             }
         }
@@ -391,7 +502,12 @@ class CaptureService : Service() {
         val ouvinte = object : IListener.Stub() {
             override fun onDataChanged(key: String?, value: String?) {
                 if (key == null) return
-                anotar("mudanca", mapOf("chave" to key, "valor" to (value ?: "")))
+                // Grandeza analogica e o chassi inteiro nao entram nem no arquivo.
+                if (key in RUIDO) return
+                // Do que sobra, o arquivo leva tudo e o canal ao vivo leva o assunto: mandar o
+                // resto ao vivo fazia a fila crescer mais rapido do que o servidor aceita.
+                val doAssunto = INTERESSE.any { it in key }
+                anotar("mudanca", mapOf("chave" to key, "valor" to (value ?: "")), aoVivo = doAssunto)
             }
         }
         listener = ouvinte
@@ -461,6 +577,9 @@ class CaptureService : Service() {
                 val mapa = HashMap<String, String>()
                 for (i in bloco.indices) {
                     val v = valores.getOrNull(i) ?: continue
+                    // O chassi inteiro nao e registrado em lugar nenhum; daqui sai so o final dele,
+                    // que serve de etiqueta.
+                    if (bloco[i] in SEGREDO) continue
                     if (v.isNotEmpty()) mapa[bloco[i]] = v
                 }
                 if (mapa.isEmpty()) return@forEach
@@ -494,7 +613,6 @@ class CaptureService : Service() {
         ultimos = cauda
         try {
             arquivo.appendText(linha + "\n")
-            linhasEscritas++
         } catch (e: Exception) {
             Log.w(TAG, "nao consegui gravar", e)
         }
@@ -516,7 +634,6 @@ class CaptureService : Service() {
                 val primeira = fila.poll(2, java.util.concurrent.TimeUnit.SECONDS)
                 if (primeira != null) lote.add(primeira)
                 fila.drainTo(lote, 200)
-                pendentes = fila.size + lote.size
                 if (lote.isEmpty()) continue
 
                 // Um POST por vez, limitado por tamanho: o servidor recusa corpo grande, e uma
@@ -533,18 +650,13 @@ class CaptureService : Service() {
 
                 if (publicar(corpo.toString())) {
                     repeat(usadas) { if (lote.isNotEmpty()) lote.removeAt(0) }
-                    linhasEnviadas += usadas
-                    getSharedPreferences("captura", Context.MODE_PRIVATE).edit()
-                        .putLong("linhas_enviadas", linhasEnviadas).apply()
                     espera = INTERVALO_MIN_MS
                 } else {
                     // Recusado (tipicamente limite de taxa). Guarda o lote e volta mais devagar,
                     // em vez de jogar fora justamente o inicio da captura.
                     espera = minOf(espera * 2, INTERVALO_MAX_MS)
-                    ultimaRecusaMs = System.currentTimeMillis()
                     Log.w(TAG, "canal recusou; nova tentativa em " + espera + "ms")
                 }
-                pendentes = fila.size + lote.size
                 Thread.sleep(espera)
             } catch (e: InterruptedException) {
                 return

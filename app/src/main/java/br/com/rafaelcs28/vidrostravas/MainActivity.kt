@@ -30,7 +30,6 @@ class MainActivity : Activity() {
     private val PEDIDO_SHIZUKU = 1001
 
     private var aguardandoEnvio = false
-    private var viuPendentes = false
     private var marcoEnvio = 0L
 
     private val aoResponder = Shizuku.OnRequestPermissionResultListener { pedido, resultado ->
@@ -143,8 +142,8 @@ class MainActivity : Activity() {
     private fun atualizar() {
         val base = "Carro " + CaptureService.etiquetaVisivel + "  -  " +
             CaptureService.estado + "  -  " + CaptureService.eventos + " eventos"
-        status.text = if (aguardandoEnvio) {
-            base + "\nenviando... faltam " + CaptureService.pendentes + " linhas"
+        status.text = if (CaptureService.envioAtivo) {
+            base + "\nenviando " + emKb(CaptureService.envioFeito) + " de " + emKb(CaptureService.envioAlvo)
         } else {
             base
         }
@@ -162,44 +161,53 @@ class MainActivity : Activity() {
      * terminou de verdade.
      */
     private fun enviarCaptura() {
+        if (CaptureService.envioAtivo) {
+            status.text = "ja esta enviando, aguarde"
+            return
+        }
         if (CaptureService.estado == "parado") {
             status.text = "a captura nao esta rodando"
             return
         }
         CaptureService.pedirReenvioCompleto()
         aguardandoEnvio = true
-        viuPendentes = false
         marcoEnvio = System.currentTimeMillis()
     }
 
+    /**
+     * So avisa quando o envio terminou de verdade.
+     *
+     * O alvo e fixo, travado no toque, e por isso a conta fecha. Acompanhar o fluxo ao vivo nunca
+     * fecharia: o carro nao para de publicar, entao "faltam N" so cresceria. A confirmacao precisa
+     * valer alguma coisa, porque e por ela que quem esta ajudando decide que pode ir embora.
+     */
     private fun conferirEnvio() {
         if (!aguardandoEnvio) return
-        if (CaptureService.pendentes > 0) {
-            viuPendentes = true
-            return
-        }
-        // So conta como entregue depois de ter visto a fila encher: logo apos o toque ela ainda
-        // esta vazia, e avisar ali seria mentir.
-        if (!viuPendentes) {
-            if (System.currentTimeMillis() - marcoEnvio > 15000) {
+        if (CaptureService.envioAtivo) return
+        if (CaptureService.envioConcluidoEm <= marcoEnvio) {
+            if (System.currentTimeMillis() - marcoEnvio > 20000) {
                 aguardandoEnvio = false
-                avisar("Nada para enviar", "Ainda nao ha captura registrada neste carro.")
+                avisar("Nao consegui enviar", "O envio nao chegou a comecar. Tente de novo em alguns segundos.")
             }
             return
         }
         aguardandoEnvio = false
-        if (CaptureService.ultimaRecusaMs > marcoEnvio) {
-            avisar(
-                "Enviado, com tropecos",
-                "A captura foi enviada por inteiro, mas o servidor recusou algumas tentativas pelo " +
-                    "caminho e elas tiveram que ser repetidas."
-            )
-        } else {
-            avisar(
+        val total = CaptureService.envioAlvo
+        val falha = CaptureService.envioFalha
+        when {
+            total == 0 -> avisar("Nada para enviar", "Ainda nao ha captura registrada neste carro.")
+            falha.isEmpty() -> avisar(
                 "Captura enviada",
-                "O registro deste carro foi enviado por completo. Pode fechar o aplicativo."
+                "O registro deste carro, " + emKb(total) + ", foi enviado por completo. " +
+                    "Pode fechar o aplicativo."
             )
+            else -> avisar("Nao consegui enviar", falha + "\n\nToque em Enviar captura de novo.")
         }
+    }
+
+    private fun emKb(bytes: Int): String {
+        val kb = bytes / 1024
+        return if (kb >= 1024) String.format("%.1f MB", kb / 1024.0) else kb.toString() + " KB"
     }
 
     private fun avisar(titulo: String, texto: String) {

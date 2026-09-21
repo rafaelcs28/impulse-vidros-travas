@@ -14,8 +14,8 @@ android {
         // seguintes, que nao ajudam em nada aqui e so atrapalhariam a captura.
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
-        versionCode = 7
-        versionName = "1.6"
+        versionCode = 10
+        versionName = "1.9"
     }
 
     buildFeatures {
