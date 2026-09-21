@@ -274,6 +274,61 @@ class CaptureService : Service() {
             private set
 
         /**
+         * Grava a captura num repositorio privado no GitHub.
+         *
+         * E o caminho preferido porque o canal publico tem cota diaria por rede, e um dia de testes
+         * a esgota - foi o que aconteceu. Aqui o registro fica guardado, privado, com o nome do
+         * carro e a hora, em vez de depender de uma janela de retencao de horas.
+         *
+         * A credencial vem do build e e de baixo privilegio de proposito: escreve num unico
+         * repositorio que so guarda captura. Como o aplicativo e publico, parta do principio de que
+         * ela pode ser extraida; o estrago possivel e escrever arquivo la, e revogar e um clique.
+         */
+        fun subirParaGitHub(arquivo: File, etiqueta: String): String? {
+            val token = BuildConfig.GITHUB_TOKEN
+            if (token.isEmpty()) return "sem credencial no aplicativo"
+            var conn: HttpURLConnection? = null
+            return try {
+                val quando = SimpleDateFormat("yyyy-MM-dd'T'HH-mm-ss", Locale.US).format(Date())
+                val caminho = "capturas/" + etiqueta + "/" + quando + ".ndjson"
+                val conteudo = android.util.Base64.encodeToString(
+                    arquivo.readBytes(), android.util.Base64.NO_WRAP
+                )
+                val corpo = "{\"message\":\"captura do carro " + etiqueta + "\",\"content\":\"" +
+                    conteudo + "\"}"
+
+                conn = URL("https://api.github.com/repos/" + BuildConfig.GITHUB_REPO +
+                    "/contents/" + caminho).openConnection() as HttpURLConnection
+                conn.requestMethod = "PUT"
+                conn.doOutput = true
+                conn.connectTimeout = 15000
+                conn.readTimeout = 120000
+                conn.setRequestProperty("Authorization", "Bearer " + token)
+                conn.setRequestProperty("Accept", "application/vnd.github+json")
+                conn.setRequestProperty("User-Agent", "impulse-vidros-travas")
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write(corpo.toByteArray(Charsets.UTF_8)) }
+
+                val codigo = conn.responseCode
+                if (codigo in 200..299) {
+                    null
+                } else {
+                    val detalhe = try {
+                        conn.errorStream?.bufferedReader()?.readText()?.take(160).orEmpty()
+                    } catch (e: Exception) {
+                        ""
+                    }
+                    "GitHub respondeu " + codigo + (if (detalhe.isNotEmpty()) ": " + detalhe else "")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "envio ao GitHub falhou", e)
+                (e.message ?: e.javaClass.simpleName)
+            } finally {
+                conn?.disconnect()
+            }
+        }
+
+        /**
          * Sobe o arquivo inteiro numa requisicao so, como anexo.
          *
          * Mandar linha a linha pelo canal nao fecha: medido num carro, 29.935 linhas e 3,9 MB
@@ -435,8 +490,13 @@ class CaptureService : Service() {
                 // 3,9 MB depois de uma tarde ligado. Em pedaços de dois quilobytes isso daria mil e
                 // quinhentos envios com limite de taxa no meio - mais de uma hora, na melhor das
                 // hipoteses, e a pessoa olhando um numero que nao acaba.
+                // GitHub primeiro: la o registro fica guardado e privado. O canal publico so entra
+                // se nao houver credencial, e a cota diaria dele ja mostrou que nao da conta.
                 val nome = "captura-" + etiqueta + ".ndjson"
-                val erro = subirArquivo(arquivo, nome) { enviados -> envioFeito = enviados }
+                var erro = subirParaGitHub(arquivo, etiqueta)
+                if (erro != null && BuildConfig.GITHUB_TOKEN.isEmpty()) {
+                    erro = subirArquivo(arquivo, nome) { enviados -> envioFeito = enviados }
+                }
                 if (erro == null) {
                     envioFeito = envioAlvo
                 } else {

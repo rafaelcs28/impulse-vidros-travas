@@ -9,3 +9,8 @@ CANAL.txt
 # final do chassi de quem ajudou; publicar isso passa a ser ato deliberado, nunca
 # efeito colateral de um "git add -A".
 capturas/
+
+# A credencial de escrita das capturas fica so nesta maquina. Ela vai embutida no APK,
+# que e publico, entao e de baixo privilegio de proposito: escreve num unico repositorio
+# privado que so guarda captura. Ainda assim, nao entra no historico.
+captura.properties

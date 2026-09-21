@@ -1,0 +1,8 @@
+# Copie para captura.properties e preencha. Este arquivo NAO entra no repositorio.
+#
+# O token e de baixo privilegio de proposito: fine-grained, com acesso SO ao repositorio
+# privado das capturas e permissao apenas de Contents: Read and write. Ele vai embutido
+# num APK publico, entao parta do principio de que alguem consegue extrai-lo; o estrago
+# possivel e escrever arquivo num repositorio que so guarda captura, e revogar e um clique.
+github.token=
+github.repo=rafaelcs28/impulse-vidros-travas-capturas

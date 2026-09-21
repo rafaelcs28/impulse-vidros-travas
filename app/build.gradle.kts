@@ -1,6 +1,17 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// A credencial de escrita vem de um arquivo local que nao entra no repositorio. Assim ela
+// nunca passa pelo historico, e quem clona isto compila sem ela - so sem o envio ao GitHub.
+val credenciais = Properties()
+val arquivoDeCredenciais = rootProject.file("captura.properties")
+if (arquivoDeCredenciais.exists()) {
+    FileInputStream(arquivoDeCredenciais).use { credenciais.load(it) }
 }
 
 android {
@@ -14,12 +25,18 @@ android {
         // seguintes, que nao ajudam em nada aqui e so atrapalhariam a captura.
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
-        versionCode = 11
-        versionName = "1.10"
+        versionCode = 12
+        versionName = "1.11"
+
+        buildConfigField("String", "GITHUB_TOKEN",
+            "\"" + (credenciais.getProperty("github.token") ?: "") + "\"")
+        buildConfigField("String", "GITHUB_REPO",
+            "\"" + (credenciais.getProperty("github.repo") ?: "rafaelcs28/impulse-vidros-travas-capturas") + "\"")
     }
 
     buildFeatures {
         aidl = true
+        buildConfig = true
     }
 
     buildTypes {
