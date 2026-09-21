@@ -1,10 +1,10 @@
 package br.com.rafaelcs28.vidrostravas
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
-import androidx.core.content.FileProvider
 import android.os.Handler
 import android.os.Looper
 import android.text.method.ScrollingMovementMethod
@@ -14,7 +14,6 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import java.io.File
 import rikka.shizuku.Shizuku
 
 /**
@@ -29,6 +28,10 @@ class MainActivity : Activity() {
     private lateinit var registro: TextView
     private val handler = Handler(Looper.getMainLooper())
     private val PEDIDO_SHIZUKU = 1001
+
+    private var aguardandoEnvio = false
+    private var viuPendentes = false
+    private var marcoEnvio = 0L
 
     private val aoResponder = Shizuku.OnRequestPermissionResultListener { pedido, resultado ->
         if (pedido == PEDIDO_SHIZUKU) {
@@ -71,8 +74,8 @@ class MainActivity : Activity() {
             setPadding(0, 20, 0, 12)
         }
         botoes.addView(Button(this).apply {
-            text = "Compartilhar captura"
-            setOnClickListener { compartilhar() }
+            text = "Enviar captura"
+            setOnClickListener { enviarCaptura() }
         })
         botoes.addView(Button(this).apply {
             text = "Parar"
@@ -138,44 +141,76 @@ class MainActivity : Activity() {
     }
 
     private fun atualizar() {
-        status.text = "Carro " + CaptureService.etiquetaVisivel + "  -  " +
+        val base = "Carro " + CaptureService.etiquetaVisivel + "  -  " +
             CaptureService.estado + "  -  " + CaptureService.eventos + " eventos"
+        status.text = if (aguardandoEnvio) {
+            base + "\nenviando... faltam " + CaptureService.pendentes + " linhas"
+        } else {
+            base
+        }
         registro.text = CaptureService.ultimos.joinToString("\n")
+        conferirEnvio()
         handler.postDelayed({ atualizar() }, 1000)
     }
 
-    private fun compartilhar() {
-        val arquivo = File(filesDir, "captura.ndjson")
-        if (!arquivo.exists()) {
-            status.text = "ainda nao ha nada capturado"
+    /**
+     * Envia o registro inteiro e avisa quando a ultima linha foi aceita.
+     *
+     * Nao existe "compartilhar" util aqui: a central nao tem aplicativo de mensagem, e o seletor do
+     * Android acabava abrindo qualquer coisa instalada, o que nao leva o arquivo a lugar nenhum.
+     * Entao o botao usa o caminho que ja funciona, e a confirmacao so aparece quando o envio
+     * terminou de verdade.
+     */
+    private fun enviarCaptura() {
+        if (CaptureService.estado == "parado") {
+            status.text = "a captura nao esta rodando"
             return
         }
-        // O nome leva a etiqueta do carro: os arquivos chegam de varias pessoas ao mesmo tempo e
-        // "captura.ndjson" repetido seis vezes na caixa de entrada nao ajuda ninguem.
-        val copia = File(cacheDir, "captura-" + CaptureService.etiquetaVisivel + ".ndjson")
-        arquivo.copyTo(copia, overwrite = true)
+        CaptureService.pedirReenvioCompleto()
+        aguardandoEnvio = true
+        viuPendentes = false
+        marcoEnvio = System.currentTimeMillis()
+    }
 
-        // Tem que ser content://. Desde o targetSdk 24 o Android derruba o aplicativo que entrega
-        // file:// num Intent, e era exatamente isso que fechava a tela aqui.
-        val uri = try {
-            FileProvider.getUriForFile(this, packageName + ".arquivos", copia)
-        } catch (e: Exception) {
-            status.text = "nao consegui preparar o arquivo: " + (e.message ?: e.javaClass.simpleName)
+    private fun conferirEnvio() {
+        if (!aguardandoEnvio) return
+        if (CaptureService.pendentes > 0) {
+            viuPendentes = true
             return
         }
-
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, "Captura do carro " + CaptureService.etiquetaVisivel)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        // So conta como entregue depois de ter visto a fila encher: logo apos o toque ela ainda
+        // esta vazia, e avisar ali seria mentir.
+        if (!viuPendentes) {
+            if (System.currentTimeMillis() - marcoEnvio > 15000) {
+                aguardandoEnvio = false
+                avisar("Nada para enviar", "Ainda nao ha captura registrada neste carro.")
+            }
+            return
         }
-        // Um envio que falha nao pode fechar a tela: quem esta ajudando perderia o proprio acesso
-        // ao arquivo junto.
+        aguardandoEnvio = false
+        if (CaptureService.ultimaRecusaMs > marcoEnvio) {
+            avisar(
+                "Enviado, com tropecos",
+                "A captura foi enviada por inteiro, mas o servidor recusou algumas tentativas pelo " +
+                    "caminho e elas tiveram que ser repetidas."
+            )
+        } else {
+            avisar(
+                "Captura enviada",
+                "O registro deste carro foi enviado por completo. Pode fechar o aplicativo."
+            )
+        }
+    }
+
+    private fun avisar(titulo: String, texto: String) {
         try {
-            startActivity(Intent.createChooser(intent, "Enviar captura"))
+            AlertDialog.Builder(this)
+                .setTitle(titulo)
+                .setMessage(texto)
+                .setPositiveButton("Fechar", null)
+                .show()
         } catch (e: Exception) {
-            status.text = "nenhum aplicativo aceitou o envio: " + (e.message ?: e.javaClass.simpleName)
+            status.text = titulo + ": " + texto
         }
     }
 }

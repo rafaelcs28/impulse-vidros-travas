@@ -184,6 +184,35 @@ class CaptureService : Service() {
         var estado: String = "parado"
             private set
 
+        /** Quanto ainda falta sair para o canal. Zero com pedido atendido significa entregue. */
+        @Volatile
+        var pendentes: Int = 0
+            private set
+
+        /**
+         * Quando o canal recusou pela ultima vez.
+         *
+         * Existe para a tela so poder dizer "enviado" quando realmente foi: sem isto, fila vazia
+         * seria confundida com entrega, inclusive depois de uma recusa que apenas adiou o envio.
+         */
+        @Volatile
+        var ultimaRecusaMs: Long = 0L
+            private set
+
+        @Volatile
+        private var pedidoDeReenvio = false
+
+        /** A tela pede o reenvio do arquivo inteiro; o servico atende quando puder. */
+        fun pedirReenvioCompleto() {
+            pedidoDeReenvio = true
+        }
+
+        private fun consumirPedidoDeReenvio(): Boolean {
+            val havia = pedidoDeReenvio
+            pedidoDeReenvio = false
+            return havia
+        }
+
         @Volatile
         var etiquetaVisivel: String = "?"
             private set
@@ -209,6 +238,7 @@ class CaptureService : Service() {
         emPrimeiroPlano()
         Thread({ remetente() }, "envio").apply { isDaemon = true }.start()
         Thread({ retomar() }, "retomada").apply { isDaemon = true }.start()
+        Thread({ atenderReenvios() }, "reenvio").apply { isDaemon = true }.start()
         Thread({ conectarComInsistencia() }, "conexao").apply { isDaemon = true }.start()
     }
 
@@ -245,6 +275,37 @@ class CaptureService : Service() {
             for (linha in enviar) fila.offer(linha)
         } catch (e: Exception) {
             Log.w(TAG, "retomada falhou", e)
+        }
+    }
+
+    /**
+     * Reenvia o arquivo inteiro quando a tela pede.
+     *
+     * O botao existe porque no carro nao ha para onde "compartilhar": a central nao tem aplicativo
+     * de mensagem, e o seletor do Android acabava oferecendo qualquer coisa instalada. Em vez de
+     * empurrar o arquivo para outro aplicativo, ele reenvia pelo caminho que ja funciona e a tela
+     * so diz "enviado" quando a ultima linha foi aceita.
+     */
+    private fun atenderReenvios() {
+        while (enviando) {
+            try {
+                if (consumirPedidoDeReenvio()) {
+                    linhasEnviadas = 0L
+                    getSharedPreferences("captura", Context.MODE_PRIVATE).edit()
+                        .putLong("linhas_enviadas", 0L).apply()
+                    val todas = if (arquivo.exists()) arquivo.readLines() else emptyList()
+                    val enviar = if (todas.size > ATRASO_MAX) todas.takeLast(ATRASO_MAX) else todas
+                    if (enviar.size < todas.size) linhasEnviadas = (todas.size - enviar.size).toLong()
+                    for (linha in enviar) fila.offer(linha)
+                    pendentes = fila.size
+                }
+                Thread.sleep(1000)
+            } catch (e: InterruptedException) {
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "reenvio falhou", e)
+                try { Thread.sleep(2000) } catch (i: InterruptedException) { return }
+            }
         }
     }
 
@@ -455,6 +516,7 @@ class CaptureService : Service() {
                 val primeira = fila.poll(2, java.util.concurrent.TimeUnit.SECONDS)
                 if (primeira != null) lote.add(primeira)
                 fila.drainTo(lote, 200)
+                pendentes = fila.size + lote.size
                 if (lote.isEmpty()) continue
 
                 // Um POST por vez, limitado por tamanho: o servidor recusa corpo grande, e uma
@@ -479,8 +541,10 @@ class CaptureService : Service() {
                     // Recusado (tipicamente limite de taxa). Guarda o lote e volta mais devagar,
                     // em vez de jogar fora justamente o inicio da captura.
                     espera = minOf(espera * 2, INTERVALO_MAX_MS)
+                    ultimaRecusaMs = System.currentTimeMillis()
                     Log.w(TAG, "canal recusou; nova tentativa em " + espera + "ms")
                 }
+                pendentes = fila.size + lote.size
                 Thread.sleep(espera)
             } catch (e: InterruptedException) {
                 return

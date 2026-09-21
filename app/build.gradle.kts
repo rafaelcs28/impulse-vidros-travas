@@ -14,8 +14,8 @@ android {
         // seguintes, que nao ajudam em nada aqui e so atrapalhariam a captura.
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
-        versionCode = 6
-        versionName = "1.5"
+        versionCode = 7
+        versionName = "1.6"
     }
 
     buildFeatures {
@@ -42,9 +42,6 @@ android {
 }
 
 dependencies {
-    // Pelo FileProvider: a partir do targetSdk 24 o Android proibe entregar file:// num Intent,
-    // e era isso que derrubava o aplicativo no botao de compartilhar.
-    implementation("androidx.core:core:1.12.0")
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 }
