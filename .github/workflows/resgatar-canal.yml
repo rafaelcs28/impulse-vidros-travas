@@ -1,0 +1,44 @@
+# Busca o historico do canal de acompanhamento a partir da infraestrutura do GitHub.
+#
+# Existe porque a maquina de quem analisa pode perder o acesso ao canal - foi o que
+# aconteceu - e o canal guarda so 12 horas. Rodando daqui, a busca sai de outra rede.
+#
+# O nome do canal NAO fica no repositorio, que e publico: vem do segredo CANAL.
+# O resultado sai como artefato, nao como commit, para nao publicar de vez o registro
+# de quem se voluntariou para ajudar.
+name: Resgatar canal
+
+on:
+  workflow_dispatch:
+    inputs:
+      desde:
+        description: "Janela a buscar (ex: 12h, 6h, 30m)"
+        required: false
+        default: "12h"
+
+jobs:
+  resgatar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Buscar historico
+        env:
+          CANAL: ${{ secrets.CANAL }}
+          DESDE: ${{ inputs.desde }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CANAL:-}" ]; then
+            echo "Segredo CANAL nao definido no repositorio." >&2
+            exit 1
+          fi
+          codigo=$(curl -s -o historico.json -w '%{http_code}' --max-time 90 \
+            "https://ntfy.sh/${CANAL}/json?poll=1&since=${DESDE}")
+          echo "resposta do canal: ${codigo}"
+          [ "$codigo" = "200" ] || exit 1
+          echo "linhas recebidas: $(wc -l < historico.json)"
+
+      - name: Publicar como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: historico-canal
+          path: historico.json
+          retention-days: 7
