@@ -64,6 +64,9 @@ class CaptureService : Service() {
         private const val TENTATIVAS_CONEXAO = 40
         private const val ESPERA_CONEXAO_MS = 15000L
 
+        /** De quanto em quanto o vigia confere se a ligacao com o carro ainda responde. */
+        private const val ESPERA_VIGIA_MS = 30000L
+
         /** Teto por POST: acima disso o ntfy recusa a mensagem. */
         private const val CORPO_MAX = 1800
 
@@ -96,7 +99,9 @@ class CaptureService : Service() {
             "car.basic.avg_vehicle_speed_since_startup",
             "car.basic.steering_wheel_angle",
             "car.basic.inside_temp",
-            "car.basic.outside_temp",
+            // car.basic.outside_temp NAO entra aqui: e condicao obrigatoria da abertura automatica
+            // da cortina do teto, entao sem ela nao da para explicar uma cortina que nao abriu. Muda
+            // devagar - 51 vezes numa tarde inteira - e nao pesa.
             "car.basic.coolant_temp",
             "car.basic.transmission_oil_temp",
             "car.basic.instant_fuel_consumption",
@@ -141,7 +146,11 @@ class CaptureService : Service() {
         /** O que vale acompanhar ao vivo quando o retrato inteiro nao cabe no canal. */
         private val INTERESSE = listOf(
             "window", "sunroof", "skylight", "door", "lock", "mirror_fold",
-            "power_state", "driving_ready", "gear"
+            "power_state", "driving_ready", "gear",
+            // A cortina do teto e um assunto proprio, e nao casa com nenhum dos termos acima:
+            // "sunshade_status" nao contem "sunroof". Sem ela, uma cortina que nao abriu fica
+            // invisivel ao vivo. outside_temp entra junto por ser condicao da abertura.
+            "shade", "outside_temp"
         )
 
         /** Servico da montadora que publica as mudancas de propriedade do carro. */
@@ -438,6 +447,7 @@ class CaptureService : Service() {
         emPrimeiroPlano()
         Thread({ remetente() }, "envio").apply { isDaemon = true }.start()
         Thread({ atenderReenvios() }, "reenvio").apply { isDaemon = true }.start()
+        Thread({ vigiarConexao() }, "vigia").apply { isDaemon = true }.start()
         Thread({ conectarComInsistencia() }, "conexao").apply { isDaemon = true }.start()
     }
 
@@ -512,6 +522,40 @@ class CaptureService : Service() {
                 Log.w(TAG, "envio sob demanda falhou", e)
                 envioAtivo = false
                 try { Thread.sleep(2000) } catch (i: InterruptedException) { return }
+            }
+        }
+    }
+
+    /**
+     * Percebe quando a ligacao com o carro morre, e refaz.
+     *
+     * Uma captura chegou com 2,5 segundos de conteudo e trinta minutos de silencio, enquanto a tela
+     * dizia "capturando". A ligacao passa pelo Shizuku, e o Shizuku cai quando o Impulse e
+     * reinstalado - que e exatamente o que a pessoa faz para trocar de versao, ou seja, no meio do
+     * teste. Sem este vigia, o silencio de um canal morto fica igual ao silencio de um carro parado,
+     * e so se descobre horas depois, olhando o arquivo.
+     */
+    private fun vigiarConexao() {
+        while (enviando) {
+            try {
+                Thread.sleep(ESPERA_VIGIA_MS)
+                val servico = control ?: continue
+                val vivo = try {
+                    servico.asBinder().pingBinder() &&
+                        servico.fetchData(CarConstants.CAR_BASIC_DOOR_LOCK_STATUS.value) != null
+                } catch (e: Exception) {
+                    false
+                }
+                if (vivo) continue
+                anotar("conexao_caiu", mapOf("estado" to estado))
+                estado = "reconectando"
+                control = null
+                listener = null
+                conectarComInsistencia()
+            } catch (e: InterruptedException) {
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "vigia falhou", e)
             }
         }
     }
