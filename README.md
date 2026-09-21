@@ -22,6 +22,15 @@ valores e para ouvir mudanças.
 Tudo vai para um arquivo no próprio aparelho e, em paralelo, para um canal de acompanhamento ao
 vivo, para quem está ajudando no diagnóstico ver acontecendo.
 
+## Link para quem vai testar
+
+<https://rafaelcs28.github.io/impulse-vidros-travas/>
+
+É uma página com o botão de instalar e o passo a passo. O botão aponta para
+`releases/latest/download/impulse-vidros-travas.apk`, que o GitHub resolve sempre para a versão mais
+recente — por isso o link continua valendo quando sai uma correção, sem precisar avisar ninguém.
+Para isso funcionar, **toda release precisa anexar o arquivo com este mesmo nome**.
+
 ## Como usar
 
 1. Instale o APK da aba **Releases**. O aparelho vai pedir para permitir a instalação de fontes

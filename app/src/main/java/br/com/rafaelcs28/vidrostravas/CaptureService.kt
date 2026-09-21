@@ -117,17 +117,46 @@ class CaptureService : Service() {
         startForeground(1, n)
     }
 
+    /**
+     * Avisa que o aplicativo abriu, ANTES de tentar conectar.
+     *
+     * Sem isto, uma instalacao em que o Shizuku nao autoriza fica invisivel de longe: a pessoa abre,
+     * nao funciona, e do lado de ca parece que ela nunca instalou. Este evento separa "nao instalou"
+     * de "instalou e travou", e no segundo caso ja diz onde travou.
+     */
+    private fun anunciarAbertura() {
+        val dados = HashMap<String, String>()
+        dados["app"] = "1.1"
+        dados["shizuku"] = try {
+            if (rikka.shizuku.Shizuku.pingBinder()) "de pe" else "nao esta rodando"
+        } catch (e: Exception) {
+            "indisponivel"
+        }
+        dados["autorizacao"] = try {
+            if (rikka.shizuku.Shizuku.pingBinder() &&
+                rikka.shizuku.Shizuku.checkSelfPermission() ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) "concedida" else "pendente"
+        } catch (e: Exception) {
+            "desconhecida"
+        }
+        anotar("abriu", dados)
+    }
+
     private fun conectar() {
+        anunciarAbertura()
         try {
             val sm = Class.forName("android.os.ServiceManager")
             val bruto = sm.getMethod("getService", String::class.java).invoke(null, SERVICO_CARRO) as? IBinder
             if (bruto == null) {
                 estado = "servico do carro nao encontrado"
+                anotar("falha", mapOf("onde" to "getService", "detalhe" to SERVICO_CARRO))
                 return
             }
             val binder = ShizukuBinderWrapper(bruto)
             if (!binder.pingBinder()) {
                 estado = "servico do carro nao respondeu"
+                anotar("falha", mapOf("onde" to "pingBinder", "detalhe" to "sem resposta"))
                 return
             }
             val servico = IIntelligentVehicleControlService.Stub.asInterface(binder)

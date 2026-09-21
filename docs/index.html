@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Impulse Vidros e Travas</title>
+<meta name="description" content="Ferramenta de diagnostico para o fechamento automatico de vidros e teto.">
+<style>
+  :root {
+    --fundo: #0b0e12;
+    --carta: #12171e;
+    --borda: #1f2933;
+    --texto: #e6edf3;
+    --fraco: #93a3b1;
+    --realce: #4ade80;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --fundo: #f4f6f8;
+      --carta: #ffffff;
+      --borda: #dfe4ea;
+      --texto: #10161c;
+      --fraco: #5a6774;
+      --realce: #15803d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px 56px;
+    background: var(--fundo);
+    color: var(--texto);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 620px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.3px; }
+  .sub { color: var(--fraco); margin: 0 0 28px; }
+  .baixar {
+    display: block;
+    text-align: center;
+    text-decoration: none;
+    background: var(--realce);
+    color: #05140a;
+    font-weight: 700;
+    font-size: 17px;
+    padding: 17px 20px;
+    border-radius: 12px;
+  }
+  .versao { text-align: center; color: var(--fraco); font-size: 13px; margin: 10px 0 30px; }
+  .carta {
+    background: var(--carta);
+    border: 1px solid var(--borda);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.7px; color: var(--fraco); margin: 0 0 12px; }
+  ol, ul { margin: 0; padding-left: 22px; }
+  li { margin-bottom: 9px; }
+  li:last-child { margin-bottom: 0; }
+  code {
+    background: var(--borda);
+    padding: 1px 6px;
+    border-radius: 5px;
+    font-size: 14px;
+  }
+  footer { color: var(--fraco); font-size: 13px; text-align: center; margin-top: 26px; }
+  footer a { color: var(--fraco); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Impulse Vidros e Travas</h1>
+  <p class="sub">
+    Ferramenta de diagnostico para descobrir por que, em alguns carros, os vidros e o teto nao
+    fecham sozinhos. Ela so le o carro, nao muda nada.
+  </p>
+
+  <a class="baixar" href="https://github.com/rafaelcs28/impulse-vidros-travas/releases/latest/download/impulse-vidros-travas.apk">
+    Baixar e instalar
+  </a>
+  <p class="versao">Este link entrega sempre a versao mais recente.</p>
+
+  <div class="carta">
+    <h2>Como usar</h2>
+    <ol>
+      <li>Baixe pelo botao acima, na propria central. Autorize a instalacao de fontes desconhecidas quando ela pedir.</li>
+      <li>Abra o <strong>Impulse</strong> uma vez, para o Shizuku subir.</li>
+      <li>Abra o <strong>Impulse Vidros e Travas</strong> e autorize quando o Shizuku perguntar.</li>
+      <li>Anote a etiqueta que aparece no topo, algo como <code>Carro 931315</code>. E por ela que separamos o seu registro do de outra pessoa.</li>
+      <li>Deixe o aplicativo aberto e faca o teste: entrar, destrancar, abrir um vidro, sair e trancar. Se puder, repita duas ou tres vezes.</li>
+      <li>O botao <strong>Compartilhar captura</strong> envia o arquivo completo por onde voce preferir.</li>
+    </ol>
+  </div>
+
+  <div class="carta">
+    <h2>Quando terminar</h2>
+    <p style="margin:0">
+      E so desinstalar. A ferramenta e descartavel, existe apenas enquanto este problema estiver
+      em aberto.
+    </p>
+  </div>
+
+  <div class="carta">
+    <h2>O que sai do carro</h2>
+    <ul>
+      <li>Estado das propriedades do veiculo: vidros, teto, portas, tranca, retrovisor, ignicao, marcha, velocidade.</li>
+      <li>A versao do carro e a versao do Impulse instalada, que e a primeira coisa a conferir quando dois carros se comportam diferente.</li>
+      <li>Os <strong>seis ultimos caracteres do chassi</strong>, so para separar um participante do outro. O numero inteiro nunca sai.</li>
+    </ul>
+    <p style="margin:12px 0 0; color: var(--fraco)">
+      Nao vai localizacao, nao vai dado de conta, nao vai nada do telefone.
+    </p>
+  </div>
+
+  <footer>
+    <a href="https://github.com/rafaelcs28/impulse-vidros-travas">Codigo e versoes no GitHub</a>
+  </footer>
+</main>
+</body>
+</html>
