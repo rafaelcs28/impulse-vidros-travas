@@ -9,6 +9,11 @@
 name: Resgatar canal
 
 on:
+  # De hora em hora: o canal guarda so 12 horas e quem analisa pode estar sem acesso
+  # a ele. Perder a captura de quem se dispos a ajudar custa caro; esta rede de
+  # seguranca nao custa nada.
+  schedule:
+    - cron: "17 */3 * * *"
   workflow_dispatch:
     inputs:
       desde:
@@ -23,7 +28,7 @@ jobs:
       - name: Buscar historico
         env:
           CANAL: ${{ secrets.CANAL }}
-          DESDE: ${{ inputs.desde }}
+          DESDE: ${{ inputs.desde || '12h' }}
         run: |
           set -euo pipefail
           if [ -z "${CANAL:-}" ]; then
@@ -39,6 +44,6 @@ jobs:
       - name: Publicar como artefato
         uses: actions/upload-artifact@v4
         with:
-          name: historico-canal
+          name: historico-canal-${{ github.run_id }}
           path: historico.json
           retention-days: 7
