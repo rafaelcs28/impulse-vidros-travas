@@ -47,6 +47,20 @@
             </intent-filter>
         </receiver>
 
+        <!--
+          Entrega o arquivo de captura por content://, nao por file://. Desde o targetSdk 24 o
+          Android derruba o aplicativo que passa file:// num Intent, que era o que acontecia.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.arquivos"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/arquivos" />
+        </provider>
+
         <!-- Exigido pela biblioteca do Shizuku para descobrir o servico. -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

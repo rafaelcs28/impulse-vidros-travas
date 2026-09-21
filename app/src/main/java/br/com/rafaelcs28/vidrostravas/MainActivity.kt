@@ -3,8 +3,8 @@ package br.com.rafaelcs28.vidrostravas
 import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
-import android.net.Uri
 import android.os.Bundle
+import androidx.core.content.FileProvider
 import android.os.Handler
 import android.os.Looper
 import android.text.method.ScrollingMovementMethod
@@ -150,14 +150,32 @@ class MainActivity : Activity() {
             status.text = "ainda nao ha nada capturado"
             return
         }
-        val copia = File(externalCacheDir ?: cacheDir, "captura.ndjson")
+        // O nome leva a etiqueta do carro: os arquivos chegam de varias pessoas ao mesmo tempo e
+        // "captura.ndjson" repetido seis vezes na caixa de entrada nao ajuda ninguem.
+        val copia = File(cacheDir, "captura-" + CaptureService.etiquetaVisivel + ".ndjson")
         arquivo.copyTo(copia, overwrite = true)
+
+        // Tem que ser content://. Desde o targetSdk 24 o Android derruba o aplicativo que entrega
+        // file:// num Intent, e era exatamente isso que fechava a tela aqui.
+        val uri = try {
+            FileProvider.getUriForFile(this, packageName + ".arquivos", copia)
+        } catch (e: Exception) {
+            status.text = "nao consegui preparar o arquivo: " + (e.message ?: e.javaClass.simpleName)
+            return
+        }
+
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_STREAM, Uri.fromFile(copia))
-            putExtra(Intent.EXTRA_SUBJECT, "Captura Impulse Vidros e Travas")
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, "Captura do carro " + CaptureService.etiquetaVisivel)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        startActivity(Intent.createChooser(intent, "Enviar captura"))
+        // Um envio que falha nao pode fechar a tela: quem esta ajudando perderia o proprio acesso
+        // ao arquivo junto.
+        try {
+            startActivity(Intent.createChooser(intent, "Enviar captura"))
+        } catch (e: Exception) {
+            status.text = "nenhum aplicativo aceitou o envio: " + (e.message ?: e.javaClass.simpleName)
+        }
     }
 }

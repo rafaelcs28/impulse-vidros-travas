@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- A copia que vai para o compartilhamento; o original fica em files/ e nao e exposto. -->
+    <cache-path name="captura" path="." />
+    <external-cache-path name="captura_externa" path="." />
+</paths>
