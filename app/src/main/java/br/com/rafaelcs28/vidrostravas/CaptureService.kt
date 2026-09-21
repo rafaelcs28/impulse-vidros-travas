@@ -38,6 +38,15 @@ class CaptureService : Service() {
     private var enviando = true
     private lateinit var arquivo: File
 
+    /**
+     * Etiqueta curta desta instalacao, sorteada uma vez e guardada.
+     *
+     * Existe porque mais de uma pessoa vai testar ao mesmo tempo e todas publicam no mesmo canal:
+     * sem ela, dois carros chegariam misturados e indistinguiveis. Vai em TODA linha, inclusive no
+     * arquivo local, para um registro recebido solto continuar identificavel.
+     */
+    private lateinit var etiqueta: String
+
     companion object {
         private const val TAG = "CapturaVidros"
         private const val CANAL_NOTIFICACAO = "captura"
@@ -50,6 +59,10 @@ class CaptureService : Service() {
 
         @Volatile
         var estado: String = "parado"
+            private set
+
+        @Volatile
+        var etiquetaVisivel: String = "?"
             private set
 
         @Volatile
@@ -68,6 +81,8 @@ class CaptureService : Service() {
     override fun onCreate() {
         super.onCreate()
         arquivo = arquivoDe(this)
+        etiqueta = definirEtiqueta()
+        etiquetaVisivel = etiqueta
         emPrimeiroPlano()
         Thread({ remetente() }, "envio").apply { isDaemon = true }.start()
         Thread({ conectar() }, "conexao").apply { isDaemon = true }.start()
@@ -149,27 +164,64 @@ class CaptureService : Service() {
         }
     }
 
-    /** Qual carro e este. Propositalmente SEM o chassi: para comparar versao, ele nao acrescenta. */
+    private fun propriedade(nome: String): String {
+        return try {
+            val sp = Class.forName("android.os.SystemProperties")
+            (sp.getMethod("get", String::class.java).invoke(null, nome) as? String).orEmpty()
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    /**
+     * Etiqueta desta instalacao: os seis ultimos caracteres do chassi.
+     *
+     * O chassi e o unico identificador estavel de verdade - sobrevive a reinstalar o aplicativo e
+     * distingue carros do mesmo modelo. Vai so o final, que ja separa os participantes sem publicar
+     * o numero inteiro num canal aberto. Sem chassi legivel, sorteia uma etiqueta e a guarda.
+     */
+    private fun definirEtiqueta(): String {
+        val chassi = propriedade("persist.beantechs.vehicle.vin").trim()
+        if (chassi.length >= 6) return chassi.takeLast(6).uppercase()
+        val prefs = getSharedPreferences("captura", MODE_PRIVATE)
+        prefs.getString("etiqueta", null)?.let { return it }
+        val sorteada = java.util.UUID.randomUUID().toString().takeLast(6).uppercase()
+        prefs.edit().putString("etiqueta", sorteada).apply()
+        return sorteada
+    }
+
+    /**
+     * Qual carro e este e qual Impulse esta instalado - as duas perguntas que a comparacao entre
+     * participantes exige. Do chassi vai so o final, o mesmo da etiqueta.
+     */
     private fun identificacao() {
         val props = listOf(
             "persist.bean.configure.code",
             "persist.vendor.gwm.cfg.trim.level",
             "persist.bean.car.mode1",
+            "persist.bean.car.mode2",
             "persist.bean.engine.type",
             "ro.bean.project.name",
             "ro.bean.project.id",
-            "persist.vendor.gwm.cfg.project.code"
+            "persist.vendor.gwm.cfg.project.code",
+            "ro.leading.car.model"
         )
         val dados = HashMap<String, String>()
-        try {
-            val sp = Class.forName("android.os.SystemProperties")
-            val get = sp.getMethod("get", String::class.java)
-            for (p in props) dados[p] = (get.invoke(null, p) as? String).orEmpty()
-        } catch (e: Exception) {
-            Log.w(TAG, "SystemProperties indisponivel", e)
-        }
+        for (p in props) dados[p] = propriedade(p)
+        dados["chassi_final"] = etiqueta
         dados["android"] = Build.VERSION.RELEASE
         dados["build"] = Build.DISPLAY
+
+        // Versao do Impulse instalada: e a primeira coisa a conferir quando dois carros se comportam
+        // diferente, antes de suspeitar do carro.
+        try {
+            val info = packageManager.getPackageInfo("br.com.redesurftank.havalshisuku", 0)
+            dados["impulse"] = info.versionName ?: "?"
+            dados["impulse_code"] = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+                info.longVersionCode else info.versionCode.toLong()).toString()
+        } catch (e: Exception) {
+            dados["impulse"] = "nao instalado"
+        }
         anotar("carro", dados)
     }
 
@@ -194,7 +246,8 @@ class CaptureService : Service() {
         val agora = System.currentTimeMillis()
         val hora = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(agora))
         val sb = StringBuilder()
-        sb.append("{\"t\":\"").append(hora).append("\",\"ms\":").append(agora)
+        sb.append("{\"carro\":\"").append(etiqueta).append("\"")
+        sb.append(",\"t\":\"").append(hora).append("\",\"ms\":").append(agora)
         sb.append(",\"tipo\":\"").append(tipo).append("\"")
         for ((k, v) in dados) {
             sb.append(",\"").append(escapar(k)).append("\":\"").append(escapar(v)).append("\"")

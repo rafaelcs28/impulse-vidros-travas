@@ -134,7 +134,8 @@ class MainActivity : Activity() {
     }
 
     private fun atualizar() {
-        status.text = CaptureService.estado + "  -  " + CaptureService.eventos + " eventos"
+        status.text = "Carro " + CaptureService.etiquetaVisivel + "  -  " +
+            CaptureService.estado + "  -  " + CaptureService.eventos + " eventos"
         registro.text = CaptureService.ultimos.joinToString("\n")
         handler.postDelayed({ atualizar() }, 1000)
     }
