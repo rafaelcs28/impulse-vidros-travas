@@ -38,6 +38,17 @@ class CaptureService : Service() {
     private var listener: IListener? = null
     private val fila = LinkedBlockingQueue<String>()
     private var enviando = true
+
+    /**
+     * Quantas linhas do arquivo ja foram aceitas pelo canal.
+     *
+     * A fila de envio vive na memoria, e o carro desligando mata o processo com ela cheia. O
+     * arquivo nunca perde nada, mas o canal perdia tudo que estivesse na fila - foi assim que um
+     * teste de cinco ciclos chegou aqui com um. Guardando quanto ja saiu, a proxima abertura
+     * retoma de onde parou em vez de recomecar do zero ou esquecer o resto.
+     */
+    private var linhasEscritas = 0L
+    private var linhasEnviadas = 0L
     private lateinit var arquivo: File
 
     /**
@@ -55,6 +66,13 @@ class CaptureService : Service() {
 
         /** Canal de acompanhamento ao vivo. Nome sorteado; quem nao sabe o nome nao ve nada. */
         const val CANAL = "impulse-vt-968d3ea264419444"
+
+        /** Teto do atraso reenviado numa abertura, para nao encher a memoria. */
+        private const val ATRASO_MAX = 3000
+
+        /** Insistencia na conexao: o Shizuku pode nao estar de pe quando o carro liga. */
+        private const val TENTATIVAS_CONEXAO = 40
+        private const val ESPERA_CONEXAO_MS = 15000L
 
         /** Teto por POST: acima disso o ntfy recusa a mensagem. */
         private const val CORPO_MAX = 1800
@@ -190,10 +208,64 @@ class CaptureService : Service() {
         etiquetaVisivel = etiqueta
         emPrimeiroPlano()
         Thread({ remetente() }, "envio").apply { isDaemon = true }.start()
-        Thread({ conectar() }, "conexao").apply { isDaemon = true }.start()
+        Thread({ retomar() }, "retomada").apply { isDaemon = true }.start()
+        Thread({ conectarComInsistencia() }, "conexao").apply { isDaemon = true }.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+
+    /**
+     * Reenfileira o que o arquivo tem e o canal ainda nao recebeu.
+     *
+     * O caso que motivou isto: a pessoa fez cinco ciclos de tranca, o carro desligou, e so o
+     * primeiro tinha chegado - o resto morreu na fila junto com o processo. O arquivo tinha tudo.
+     * Agora a abertura seguinte empurra o atraso em vez de deixa-lo so no aparelho dela.
+     */
+    private fun retomar() {
+        try {
+            val prefs = getSharedPreferences("captura", Context.MODE_PRIVATE)
+            linhasEnviadas = prefs.getLong("linhas_enviadas", 0L)
+            if (!arquivo.exists()) return
+            val todas = arquivo.readLines()
+            linhasEscritas = todas.size.toLong()
+            if (linhasEnviadas > linhasEscritas) {
+                // Arquivo menor que o marcador significa que ele foi embora (reinstalacao limpa).
+                linhasEnviadas = 0L
+            }
+            val atraso = todas.drop(linhasEnviadas.toInt())
+            if (atraso.isEmpty()) return
+            // Teto para nao encher a memoria com um atraso enorme: o arquivo continua completo e
+            // o botao de compartilhar entrega o resto.
+            val enviar = if (atraso.size > ATRASO_MAX) atraso.takeLast(ATRASO_MAX) else atraso
+            if (enviar.size < atraso.size) linhasEnviadas += (atraso.size - enviar.size)
+            anotar("retomada", mapOf(
+                "pendentes" to atraso.size.toString(),
+                "reenviando" to enviar.size.toString()
+            ))
+            for (linha in enviar) fila.offer(linha)
+        } catch (e: Exception) {
+            Log.w(TAG, "retomada falhou", e)
+        }
+    }
+
+    /**
+     * Insiste na conexao em vez de desistir na primeira tentativa.
+     *
+     * Ligando junto com o carro, o Shizuku costuma ainda nao estar de pe quando este servico sobe.
+     * Desistir ali significaria nao capturar justamente o inicio do ciclo que se quer observar.
+     */
+    private fun conectarComInsistencia() {
+        for (tentativa in 1..TENTATIVAS_CONEXAO) {
+            conectar()
+            if (control != null) return
+            estado = "esperando o Shizuku (tentativa " + tentativa + ")"
+            try {
+                Thread.sleep(ESPERA_CONEXAO_MS)
+            } catch (e: InterruptedException) {
+                return
+            }
+        }
+    }
 
     override fun onDestroy() {
         enviando = false
@@ -361,6 +433,7 @@ class CaptureService : Service() {
         ultimos = cauda
         try {
             arquivo.appendText(linha + "\n")
+            linhasEscritas++
         } catch (e: Exception) {
             Log.w(TAG, "nao consegui gravar", e)
         }
@@ -398,6 +471,9 @@ class CaptureService : Service() {
 
                 if (publicar(corpo.toString())) {
                     repeat(usadas) { if (lote.isNotEmpty()) lote.removeAt(0) }
+                    linhasEnviadas += usadas
+                    getSharedPreferences("captura", Context.MODE_PRIVATE).edit()
+                        .putLong("linhas_enviadas", linhasEnviadas).apply()
                     espera = INTERVALO_MIN_MS
                 } else {
                     // Recusado (tipicamente limite de taxa). Guarda o lote e volta mais devagar,
