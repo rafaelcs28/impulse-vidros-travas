@@ -24,7 +24,8 @@ vivo, para quem está ajudando no diagnóstico ver acontecendo.
 
 ## Link para quem vai testar
 
-<https://rafaelcs28.github.io/impulse-vidros-travas/>
+- **Direto, baixa o APK na hora:** <https://tinyurl.com/impulsevt>
+- **Página com o passo a passo:** <https://rafaelcs28.github.io/impulse-vidros-travas/>
 
 É uma página com o botão de instalar e o passo a passo. O botão aponta para
 `releases/latest/download/impulse-vidros-travas.apk`, que o GitHub resolve sempre para a versão mais

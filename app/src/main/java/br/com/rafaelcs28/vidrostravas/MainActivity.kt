@@ -100,6 +100,10 @@ class MainActivity : Activity() {
         raiz.gravity = Gravity.TOP
         setContentView(raiz)
 
+        // Antes de qualquer coisa, e mesmo que o Shizuku nao coopere: assim uma instalacao que
+        // trava na autorizacao aparece daqui como travada, e nao como inexistente.
+        CaptureService.avisarAbertura(this)
+
         Shizuku.addRequestPermissionResultListener(aoResponder)
         pedirAutorizacao()
         atualizar()

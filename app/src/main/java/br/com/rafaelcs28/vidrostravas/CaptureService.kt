@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.os.Build
+import android.content.Context
+import android.content.pm.PackageManager
 import android.os.IBinder
 import android.util.Log
 import com.beantechs.intelligentvehiclecontrol.IIntelligentVehicleControlService
@@ -56,6 +58,92 @@ class CaptureService : Service() {
 
         /** Servico da montadora que publica as mudancas de propriedade do carro. */
         private const val SERVICO_CARRO = "com.beantechs.intelligentvehiclecontrol"
+
+        fun propriedadeDoSistema(nome: String): String = try {
+            val sp = Class.forName("android.os.SystemProperties")
+            (sp.getMethod("get", String::class.java).invoke(null, nome) as? String).orEmpty()
+        } catch (e: Exception) {
+            ""
+        }
+
+        /**
+         * Etiqueta desta instalacao: os seis ultimos caracteres do chassi.
+         *
+         * O chassi e o unico identificador estavel de verdade - sobrevive a reinstalar o aplicativo
+         * e distingue carros do mesmo modelo. Vai so o final, que ja separa os participantes sem
+         * publicar o numero inteiro num canal aberto. Sem chassi legivel, sorteia uma etiqueta e a
+         * guarda.
+         */
+        fun etiquetaDe(ctx: Context): String {
+            val chassi = propriedadeDoSistema("persist.beantechs.vehicle.vin").trim()
+            if (chassi.length >= 6) return chassi.takeLast(6).uppercase()
+            val prefs = ctx.getSharedPreferences("captura", Context.MODE_PRIVATE)
+            prefs.getString("etiqueta", null)?.let { return it }
+            val sorteada = java.util.UUID.randomUUID().toString().takeLast(6).uppercase()
+            prefs.edit().putString("etiqueta", sorteada).apply()
+            return sorteada
+        }
+
+        fun enviar(corpo: String) {
+            var conn: HttpURLConnection? = null
+            try {
+                conn = URL("https://ntfy.sh/" + CANAL).openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+                conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
+                conn.outputStream.use { it.write(corpo.toByteArray(Charsets.UTF_8)) }
+                conn.responseCode
+            } catch (e: Exception) {
+                // Sem rede o registro local continua completo; o vivo e um extra, nao a fonte.
+                Log.w(TAG, "publicacao falhou", e)
+            } finally {
+                conn?.disconnect()
+            }
+        }
+
+        /**
+         * Avisa que o aplicativo abriu, chamado pela TELA e nao pelo servico.
+         *
+         * Aqui e o unico lugar que serve: o servico so existe depois que o Shizuku autoriza, e e
+         * justamente a instalacao que nao passa dessa etapa que precisamos enxergar. Sem este
+         * aviso, quem abriu e travou no Shizuku fica identico, daqui, a quem nunca instalou.
+         */
+        fun avisarAbertura(ctx: Context) {
+            Thread {
+                // Uma excecao solta numa thread derruba o processo inteiro no Android, e este
+                // aviso nao vale o preco de fechar o aplicativo na cara de quem foi ajudar.
+                try {
+                    avisar(ctx)
+                } catch (e: Exception) {
+                    Log.w(TAG, "aviso de abertura falhou", e)
+                }
+            }.start()
+        }
+
+        private fun avisar(ctx: Context) {
+                val shizuku = try {
+                    when {
+                        !rikka.shizuku.Shizuku.pingBinder() -> "nao esta rodando"
+                        rikka.shizuku.Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> "autorizado"
+                        else -> "esperando autorizacao"
+                    }
+                } catch (e: Exception) {
+                    "indisponivel"
+                }
+                val versao = try {
+                    ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName.orEmpty()
+                } catch (e: Exception) {
+                    "?"
+                }
+                val agora = System.currentTimeMillis()
+                val hora = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(agora))
+                enviar(
+                    "{\"carro\":\"" + etiquetaDe(ctx) + "\",\"t\":\"" + hora + "\",\"ms\":" + agora +
+                        ",\"tipo\":\"abriu\",\"app\":\"" + versao + "\",\"shizuku\":\"" + shizuku + "\"}"
+                )
+        }
 
         @Volatile
         var estado: String = "parado"
@@ -117,34 +205,7 @@ class CaptureService : Service() {
         startForeground(1, n)
     }
 
-    /**
-     * Avisa que o aplicativo abriu, ANTES de tentar conectar.
-     *
-     * Sem isto, uma instalacao em que o Shizuku nao autoriza fica invisivel de longe: a pessoa abre,
-     * nao funciona, e do lado de ca parece que ela nunca instalou. Este evento separa "nao instalou"
-     * de "instalou e travou", e no segundo caso ja diz onde travou.
-     */
-    private fun anunciarAbertura() {
-        val dados = HashMap<String, String>()
-        dados["app"] = "1.1"
-        dados["shizuku"] = try {
-            if (rikka.shizuku.Shizuku.pingBinder()) "de pe" else "nao esta rodando"
-        } catch (e: Exception) {
-            "indisponivel"
-        }
-        dados["autorizacao"] = try {
-            if (rikka.shizuku.Shizuku.pingBinder() &&
-                rikka.shizuku.Shizuku.checkSelfPermission() ==
-                android.content.pm.PackageManager.PERMISSION_GRANTED
-            ) "concedida" else "pendente"
-        } catch (e: Exception) {
-            "desconhecida"
-        }
-        anotar("abriu", dados)
-    }
-
     private fun conectar() {
-        anunciarAbertura()
         try {
             val sm = Class.forName("android.os.ServiceManager")
             val bruto = sm.getMethod("getService", String::class.java).invoke(null, SERVICO_CARRO) as? IBinder
@@ -193,14 +254,7 @@ class CaptureService : Service() {
         }
     }
 
-    private fun propriedade(nome: String): String {
-        return try {
-            val sp = Class.forName("android.os.SystemProperties")
-            (sp.getMethod("get", String::class.java).invoke(null, nome) as? String).orEmpty()
-        } catch (e: Exception) {
-            ""
-        }
-    }
+    private fun propriedade(nome: String): String = propriedadeDoSistema(nome)
 
     /**
      * Etiqueta desta instalacao: os seis ultimos caracteres do chassi.
@@ -209,15 +263,7 @@ class CaptureService : Service() {
      * distingue carros do mesmo modelo. Vai so o final, que ja separa os participantes sem publicar
      * o numero inteiro num canal aberto. Sem chassi legivel, sorteia uma etiqueta e a guarda.
      */
-    private fun definirEtiqueta(): String {
-        val chassi = propriedade("persist.beantechs.vehicle.vin").trim()
-        if (chassi.length >= 6) return chassi.takeLast(6).uppercase()
-        val prefs = getSharedPreferences("captura", MODE_PRIVATE)
-        prefs.getString("etiqueta", null)?.let { return it }
-        val sorteada = java.util.UUID.randomUUID().toString().takeLast(6).uppercase()
-        prefs.edit().putString("etiqueta", sorteada).apply()
-        return sorteada
-    }
+    private fun definirEtiqueta(): String = etiquetaDe(this)
 
     /**
      * Qual carro e este e qual Impulse esta instalado - as duas perguntas que a comparacao entre
@@ -318,22 +364,5 @@ class CaptureService : Service() {
         }
     }
 
-    private fun publicar(corpo: String) {
-        var conn: HttpURLConnection? = null
-        try {
-            conn = URL("https://ntfy.sh/" + CANAL).openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.doOutput = true
-            conn.connectTimeout = 8000
-            conn.readTimeout = 8000
-            conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
-            conn.outputStream.use { it.write(corpo.toByteArray(Charsets.UTF_8)) }
-            conn.responseCode
-        } catch (e: Exception) {
-            // Sem rede o registro local continua completo; o vivo e um extra, nao a fonte.
-            Log.w(TAG, "publicacao falhou", e)
-        } finally {
-            conn?.disconnect()
-        }
-    }
+    private fun publicar(corpo: String) = enviar(corpo)
 }
