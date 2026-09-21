@@ -4,3 +4,8 @@ app/build/
 local.properties
 .idea/
 CANAL.txt
+
+# Capturas nao entram por arrasto. O repositorio e publico e cada linha carrega o
+# final do chassi de quem ajudou; publicar isso passa a ser ato deliberado, nunca
+# efeito colateral de um "git add -A".
+capturas/
