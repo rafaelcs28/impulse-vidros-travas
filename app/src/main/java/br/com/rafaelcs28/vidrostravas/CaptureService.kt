@@ -56,6 +56,19 @@ class CaptureService : Service() {
         /** Canal de acompanhamento ao vivo. Nome sorteado; quem nao sabe o nome nao ve nada. */
         const val CANAL = "impulse-vt-968d3ea264419444"
 
+        /** Teto por POST: acima disso o ntfy recusa a mensagem. */
+        private const val CORPO_MAX = 1800
+
+        /** Ritmo do envio ao vivo. Sobe sozinho quando o servidor recusa, volta quando aceita. */
+        private const val INTERVALO_MIN_MS = 2000L
+        private const val INTERVALO_MAX_MS = 30000L
+
+        /** O que vale acompanhar ao vivo quando o retrato inteiro nao cabe no canal. */
+        private val INTERESSE = listOf(
+            "window", "sunroof", "skylight", "door", "lock", "mirror_fold",
+            "power_state", "driving_ready", "gear"
+        )
+
         /** Servico da montadora que publica as mudancas de propriedade do carro. */
         private const val SERVICO_CARRO = "com.beantechs.intelligentvehiclecontrol"
 
@@ -84,9 +97,10 @@ class CaptureService : Service() {
             return sorteada
         }
 
-        fun enviar(corpo: String) {
+        /** Devolve se o servidor aceitou. Recusa nao pode virar perda silenciosa. */
+        fun enviar(corpo: String): Boolean {
             var conn: HttpURLConnection? = null
-            try {
+            return try {
                 conn = URL("https://ntfy.sh/" + CANAL).openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.doOutput = true
@@ -94,10 +108,13 @@ class CaptureService : Service() {
                 conn.readTimeout = 8000
                 conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
                 conn.outputStream.use { it.write(corpo.toByteArray(Charsets.UTF_8)) }
-                conn.responseCode
+                val codigo = conn.responseCode
+                if (codigo !in 200..299) Log.w(TAG, "canal respondeu " + codigo)
+                codigo in 200..299
             } catch (e: Exception) {
                 // Sem rede o registro local continua completo; o vivo e um extra, nao a fonte.
                 Log.w(TAG, "publicacao falhou", e)
+                false
             } finally {
                 conn?.disconnect()
             }
@@ -224,8 +241,11 @@ class CaptureService : Service() {
             control = servico
 
             val chaves = CarConstants.values().map { it.value }.distinct().toTypedArray()
-            registrar(servico, chaves)
+            // A identificacao vai PRIMEIRO, de proposito: registrar o ouvinte solta uma enxurrada de
+            // mudancas, e quem entrasse na fila atras dela demoraria minutos para aparecer no canal.
+            // De que carro se trata e a primeira pergunta, nao a ultima.
             identificacao()
+            registrar(servico, chaves)
             retrato(servico, chaves)
             estado = "capturando (" + chaves.size + " chaves)"
         } catch (e: Exception) {
@@ -310,14 +330,21 @@ class CaptureService : Service() {
                     val v = valores.getOrNull(i) ?: continue
                     if (v.isNotEmpty()) mapa[bloco[i]] = v
                 }
-                if (mapa.isNotEmpty()) anotar("retrato", mapa)
+                if (mapa.isEmpty()) return@forEach
+                // O retrato inteiro sao centenas de chaves. No canal ao vivo ele nao cabe: o ntfy
+                // limita tamanho e taxa, e um retrato completo consome a cota que as MUDANCAS -
+                // o que de fato se esta observando - precisam ter. Inteiro ele vai para o arquivo,
+                // que e a fonte; ao vivo vai so o punhado de chaves do assunto.
+                anotar("retrato", mapa, aoVivo = false)
+                val resumo = mapa.filterKeys { chave -> INTERESSE.any { it in chave } }
+                if (resumo.isNotEmpty()) anotar("retrato_resumo", resumo)
             } catch (e: Exception) {
                 Log.w(TAG, "fetchDatas falhou num bloco", e)
             }
         }
     }
 
-    private fun anotar(tipo: String, dados: Map<String, String>) {
+    private fun anotar(tipo: String, dados: Map<String, String>, aoVivo: Boolean = true) {
         val agora = System.currentTimeMillis()
         val hora = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(agora))
         val sb = StringBuilder()
@@ -337,7 +364,7 @@ class CaptureService : Service() {
         } catch (e: Exception) {
             Log.w(TAG, "nao consegui gravar", e)
         }
-        fila.offer(linha)
+        if (aoVivo) fila.offer(linha)
     }
 
     private fun escapar(s: String): String =
@@ -349,20 +376,44 @@ class CaptureService : Service() {
      */
     private fun remetente() {
         val lote = ArrayList<String>()
+        var espera = INTERVALO_MIN_MS
         while (enviando) {
             try {
                 val primeira = fila.poll(2, java.util.concurrent.TimeUnit.SECONDS)
                 if (primeira != null) lote.add(primeira)
-                fila.drainTo(lote, 60)
+                fila.drainTo(lote, 200)
                 if (lote.isEmpty()) continue
-                publicar(lote.joinToString("\n"))
-                lote.clear()
+
+                // Um POST por vez, limitado por tamanho: o servidor recusa corpo grande, e uma
+                // recusa levava junto tudo o que estava no mesmo lote.
+                val corpo = StringBuilder()
+                var usadas = 0
+                for (linha in lote) {
+                    if (corpo.isNotEmpty() && corpo.length + linha.length + 1 > CORPO_MAX) break
+                    if (corpo.isNotEmpty()) corpo.append('\n')
+                    corpo.append(linha)
+                    usadas++
+                }
+                if (usadas == 0) usadas = 1  // linha sozinha maior que o teto: vai assim mesmo
+
+                if (publicar(corpo.toString())) {
+                    repeat(usadas) { if (lote.isNotEmpty()) lote.removeAt(0) }
+                    espera = INTERVALO_MIN_MS
+                } else {
+                    // Recusado (tipicamente limite de taxa). Guarda o lote e volta mais devagar,
+                    // em vez de jogar fora justamente o inicio da captura.
+                    espera = minOf(espera * 2, INTERVALO_MAX_MS)
+                    Log.w(TAG, "canal recusou; nova tentativa em " + espera + "ms")
+                }
+                Thread.sleep(espera)
+            } catch (e: InterruptedException) {
+                return
             } catch (e: Exception) {
                 Log.w(TAG, "envio falhou", e)
-                lote.clear()
+                try { Thread.sleep(espera) } catch (i: InterruptedException) { return }
             }
         }
     }
 
-    private fun publicar(corpo: String) = enviar(corpo)
+    private fun publicar(corpo: String): Boolean = enviar(corpo)
 }
