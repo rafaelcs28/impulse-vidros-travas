@@ -77,6 +77,10 @@ class MainActivity : Activity() {
             setOnClickListener { enviarCaptura() }
         })
         botoes.addView(Button(this).apply {
+            text = "Limpar"
+            setOnClickListener { limpar() }
+        })
+        botoes.addView(Button(this).apply {
             text = "Parar"
             setOnClickListener {
                 stopService(Intent(this@MainActivity, CaptureService::class.java))
@@ -203,6 +207,31 @@ class MainActivity : Activity() {
             )
             else -> avisar("Nao consegui enviar", falha + "\n\nToque em Enviar captura de novo.")
         }
+    }
+
+    /**
+     * Recomeca o registro do zero, com confirmacao.
+     *
+     * Apagar captura e irreversivel, e pode ser justamente a volta que interessava. Por isso
+     * pergunta antes, sempre, mesmo sendo um utilitario descartavel.
+     */
+    private fun limpar() {
+        if (CaptureService.envioAtivo) {
+            status.text = "esta enviando, espere terminar"
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Recomecar do zero?")
+            .setMessage(
+                "Isto apaga tudo o que ja foi capturado neste carro e comeca um registro novo. " +
+                    "Nao da para desfazer."
+            )
+            .setPositiveButton("Apagar e recomecar") { _, _ ->
+                CaptureService.pedirLimpeza()
+                status.text = "recomecando..."
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     private fun emKb(bytes: Int): String {

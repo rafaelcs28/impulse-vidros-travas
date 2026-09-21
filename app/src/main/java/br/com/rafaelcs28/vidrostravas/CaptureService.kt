@@ -339,6 +339,26 @@ class CaptureService : Service() {
         }
 
         @Volatile
+        private var pedidoDeLimpeza = false
+
+        /**
+         * Recomeca o registro do zero.
+         *
+         * O arquivo so cresce, e quem instalou antes do filtro de ruido carrega megabytes de
+         * velocidade e tensao de bateria que nao servem para nada aqui - e que ainda por cima
+         * inviabilizam o envio. Limpar e mais honesto do que tentar enviar lixo acumulado.
+         */
+        fun pedirLimpeza() {
+            pedidoDeLimpeza = true
+        }
+
+        private fun consumirPedidoDeLimpeza(): Boolean {
+            val havia = pedidoDeLimpeza
+            pedidoDeLimpeza = false
+            return havia
+        }
+
+        @Volatile
         var etiquetaVisivel: String = "?"
             private set
 
@@ -379,6 +399,22 @@ class CaptureService : Service() {
     private fun atenderReenvios() {
         while (enviando) {
             try {
+                if (consumirPedidoDeLimpeza()) {
+                    arquivo.delete()
+                    eventos = 0
+                    ultimos = emptyList()
+                    envioAlvo = 0
+                    envioFeito = 0
+                    envioFalha = ""
+                    anotar("recomeco", mapOf("motivo" to "limpeza pedida na tela"))
+                    control?.let { servico ->
+                        // Sem um retrato novo, o arquivo limpo comecaria sem ponto de partida e as
+                        // mudancas seguintes ficariam sem contra o que serem lidas.
+                        val chaves = CarConstants.values().map { it.value }.distinct().toTypedArray()
+                        identificacao()
+                        retrato(servico, chaves)
+                    }
+                }
                 if (!consumirPedidoDeReenvio()) {
                     Thread.sleep(500)
                     continue
