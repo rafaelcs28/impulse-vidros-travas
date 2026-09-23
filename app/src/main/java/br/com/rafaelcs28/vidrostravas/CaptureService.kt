@@ -565,13 +565,40 @@ class CaptureService : Service() {
         while (enviando) {
             try {
                 if (consumirPedidoDeLimpeza()) {
+                    // Guarda ANTES de apagar, sempre.
+                    //
+                    // Isto nao e zelo: ja custou um dia inteiro de investigacao. No carro 944020, em
+                    // 23/09, o botao Limpar foi tocado tres vezes (15:06, 15:08, 15:13) e cada toque
+                    // levou junto tudo o que viera antes - inclusive a unica janela em que o defeito
+                    // tinha acontecido. Sobraram seis ciclos de tranca, todos funcionando, e nenhum
+                    // registro da falha. Quem aperta Limpar esta querendo comecar um teste limpo, e
+                    // nao abrir mao da prova; o aplicativo e que nao pode tratar as duas coisas como
+                    // a mesma.
+                    var guardado: String? = null
+                    var guardados = 0L
+                    if (arquivo.exists() && arquivo.length() > 0) {
+                        guardados = arquivo.length()
+                        // Subpasta dentro do proprio carro: fica obvio, ao listar, o que foi salvo
+                        // de uma limpeza, sem separar o carro em dois lugares.
+                        guardado = subirParaGitHub(arquivo, etiqueta + "/antes-de-limpar")
+                    }
                     arquivo.delete()
                     eventos = 0
                     ultimos = emptyList()
                     envioAlvo = 0
                     envioFeito = 0
                     envioFalha = ""
-                    anotar("recomeco", mapOf("motivo" to "limpeza pedida na tela"))
+                    // Depois do delete, de proposito: assim a nota de que o anterior foi guardado
+                    // abre o arquivo NOVO, em vez de ser apagada junto com o antigo.
+                    anotar(
+                        "recomeco",
+                        mapOf(
+                            "motivo" to "limpeza pedida na tela",
+                            "anterior" to (if (guardados == 0L) "vazio"
+                                else if (guardado == null) "guardado " + guardados + " bytes"
+                                else "NAO guardado: " + guardado)
+                        )
+                    )
                     control?.let { servico ->
                         // Sem um retrato novo, o arquivo limpo comecaria sem ponto de partida e as
                         // mudancas seguintes ficariam sem contra o que serem lidas.
@@ -876,6 +903,10 @@ class CaptureService : Service() {
         dados["chassi_final"] = etiqueta
         dados["android"] = Build.VERSION.RELEASE
         dados["build"] = Build.DISPLAY
+        // Versao DESTE aplicativo. Sem ela, ao ler uma captura antiga so da para deduzir a versao
+        // pelo que ela contem ou deixa de conter - foi preciso adivinhar, pela presenca das linhas
+        // de sonda, qual versao gerou cada arquivo do carro 944020. Uma palavra resolve.
+        dados["captura"] = BuildConfig.VERSION_NAME
 
         // Versao do Impulse instalada: e a primeira coisa a conferir quando dois carros se comportam
         // diferente, antes de suspeitar do carro.
