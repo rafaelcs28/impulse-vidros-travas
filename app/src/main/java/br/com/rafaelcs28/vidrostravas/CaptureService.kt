@@ -181,6 +181,49 @@ class CaptureService : Service() {
             return sorteada
         }
 
+        /**
+         * Roda um comando pelo Shizuku e devolve a saida.
+         *
+         * Existe so para a auto-atualizacao: `pm install` precisa de privilegio, e o Shizuku ja esta
+         * aqui. Os canos sao fechados um a um, e o processo destruido no finally - o servidor do
+         * Shizuku vaza por processo criado, e este aplicativo nao deve piorar o problema que veio
+         * ajudar a diagnosticar.
+         */
+        fun rodarComandoShizuku(comando: Array<String>): String {
+            val binder = rikka.shizuku.Shizuku.getBinder() ?: return ""
+            val servico = moe.shizuku.server.IShizukuService.Stub.asInterface(binder) ?: return ""
+            var processo: moe.shizuku.server.IRemoteProcess? = null
+            return try {
+                processo = servico.newProcess(comando, null, null) ?: return ""
+                try { processo.outputStream?.close() } catch (e: Exception) {}
+                val saida = StringBuilder()
+                processo.inputStream?.let { pfd ->
+                    try {
+                        java.io.BufferedReader(
+                            java.io.InputStreamReader(java.io.FileInputStream(pfd.fileDescriptor))
+                        ).use { leitor ->
+                            var linha = leitor.readLine()
+                            while (linha != null) {
+                                saida.append(linha).append('\n')
+                                linha = leitor.readLine()
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "leitura da saida falhou", e)
+                    } finally {
+                        try { pfd.close() } catch (e: Exception) {}
+                    }
+                }
+                processo.waitFor()
+                saida.toString().trim()
+            } catch (e: Exception) {
+                Log.w(TAG, "comando pelo Shizuku falhou", e)
+                ""
+            } finally {
+                try { processo?.destroy() } catch (e: Exception) {}
+            }
+        }
+
         /** Devolve se o servidor aceitou. Recusa nao pode virar perda silenciosa. */
         fun enviar(corpo: String): Boolean {
             var conn: HttpURLConnection? = null

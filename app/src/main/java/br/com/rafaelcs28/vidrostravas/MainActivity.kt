@@ -32,6 +32,10 @@ class MainActivity : Activity() {
     private var aguardandoEnvio = false
     private var marcoEnvio = 0L
 
+    /** Botao que so existe quando ha versao nova; fica no topo, destacado. */
+    private var botaoAtualizar: Button? = null
+    private var atualizando = false
+
     private val aoResponder = Shizuku.OnRequestPermissionResultListener { pedido, resultado ->
         if (pedido == PEDIDO_SHIZUKU) {
             if (resultado == android.content.pm.PackageManager.PERMISSION_GRANTED) iniciar()
@@ -60,6 +64,17 @@ class MainActivity : Activity() {
             setTextColor(Color.parseColor("#93a3b1"))
             setPadding(0, 8, 0, 20)
         })
+
+        // Destacado e no topo: quem esta ajudando nao tem por que cacar link, e captura feita numa
+        // versao com defeito e trabalho perdido dos dois lados.
+        botaoAtualizar = Button(this).apply {
+            text = "Atualizar"
+            visibility = android.view.View.GONE
+            setBackgroundColor(Color.parseColor("#4ade80"))
+            setTextColor(Color.parseColor("#05140a"))
+            setOnClickListener { instalarAtualizacao() }
+        }
+        raiz.addView(botaoAtualizar)
 
         status = TextView(this).apply {
             textSize = 16f
@@ -109,6 +124,9 @@ class MainActivity : Activity() {
         // Antes de qualquer coisa, e mesmo que o Shizuku nao coopere: assim uma instalacao que
         // trava na autorizacao aparece daqui como travada, e nao como inexistente.
         CaptureService.avisarAbertura(this)
+
+        // Uma vez por abertura. O aplicativo sobe junto com a central, entao e uma por partida.
+        Atualizador.verificarUmaVez { runOnUiThread { mostrarBotaoDeAtualizacao() } }
 
         Shizuku.addRequestPermissionResultListener(aoResponder)
         pedirAutorizacao()
@@ -232,6 +250,46 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Cancelar", null)
             .show()
+    }
+
+    private fun mostrarBotaoDeAtualizacao() {
+        val versao = Atualizador.versaoDisponivel ?: return
+        botaoAtualizar?.apply {
+            text = "Atualizar para a " + versao
+            visibility = android.view.View.VISIBLE
+        }
+    }
+
+    /**
+     * Baixa e instala, sem sair da tela.
+     *
+     * A instalacao preserva os dados, entao a captura em andamento sobrevive - ninguem perde o
+     * teste por atualizar no meio dele.
+     */
+    private fun instalarAtualizacao() {
+        if (atualizando) return
+        atualizando = true
+        botaoAtualizar?.isEnabled = false
+        status.text = "preparando a atualizacao..."
+        Thread {
+            val erro = Atualizador.baixarEInstalar(applicationContext) { passo ->
+                runOnUiThread { status.text = passo }
+            }
+            runOnUiThread {
+                atualizando = false
+                botaoAtualizar?.isEnabled = true
+                if (erro == null) {
+                    botaoAtualizar?.visibility = android.view.View.GONE
+                    avisar(
+                        "Atualizado",
+                        "A nova versao foi instalada. Feche e abra o aplicativo para usa-la. " +
+                            "O que ja foi capturado continua aqui."
+                    )
+                } else {
+                    avisar("Nao consegui atualizar", erro)
+                }
+            }
+        }.start()
     }
 
     private fun emKb(bytes: Int): String {
