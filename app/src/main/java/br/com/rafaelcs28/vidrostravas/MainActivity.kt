@@ -53,7 +53,10 @@ class MainActivity : Activity() {
         }
 
         raiz.addView(TextView(this).apply {
-            text = "Impulse Vidros e Travas"
+            // A versao fica no titulo, visivel sem procurar: quem esta ajudando de longe precisa
+            // conseguir dizer em qual esta, e depois de atualizar precisa conseguir confirmar que
+            // trocou. Sem isso, "atualizou?" vira uma conversa de tentativa e erro.
+            text = "Impulse Vidros e Travas  " + BuildConfig.VERSION_NAME
             textSize = 22f
             setTextColor(Color.WHITE)
         })
