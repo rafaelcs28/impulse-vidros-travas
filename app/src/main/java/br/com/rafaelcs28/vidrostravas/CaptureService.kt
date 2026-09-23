@@ -536,17 +536,35 @@ class CaptureService : Service() {
      * e so se descobre horas depois, olhando o arquivo.
      */
     private fun vigiarConexao() {
+        var falhasSeguidas = 0
         while (enviando) {
             try {
                 Thread.sleep(ESPERA_VIGIA_MS)
                 val servico = control ?: continue
+
+                // Vivo = o binder responde. Nada mais.
+                //
+                // Antes isto exigia tambem que uma leitura de chave voltasse preenchida, e foi erro:
+                // `fetchData` devolver vazio e resposta legitima, nao morte. O resultado foi um
+                // alarme falso exatamente 30s depois de cada abertura, quatro vezes num registro so,
+                // com reconexao desnecessaria. Quando o binder morre de verdade, a chamada LANCA, e
+                // o catch abaixo pega.
                 val vivo = try {
-                    servico.asBinder().pingBinder() &&
-                        servico.fetchData(CarConstants.CAR_BASIC_DOOR_LOCK_STATUS.value) != null
+                    servico.asBinder().pingBinder()
                 } catch (e: Exception) {
                     false
                 }
-                if (vivo) continue
+                if (vivo) {
+                    falhasSeguidas = 0
+                    continue
+                }
+
+                // Duas falhas seguidas antes de agir: um tropeco isolado nao vale uma reconexao,
+                // que custa re-registrar o ouvinte e um retrato novo.
+                falhasSeguidas++
+                if (falhasSeguidas < 2) continue
+
+                falhasSeguidas = 0
                 anotar("conexao_caiu", mapOf("estado" to estado))
                 estado = "reconectando"
                 control = null
