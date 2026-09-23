@@ -498,6 +498,11 @@ class CaptureService : Service() {
     override fun onCreate() {
         super.onCreate()
         arquivo = arquivoDe(this)
+        // O arquivo vive no disco e o contador vivia so na memoria. Toda partida do carro a tela
+        // voltava dizendo "0 eventos" sobre uma captura de dias, e quem esta ajudando de longe
+        // concluiria que a noite inteira se perdeu - e poderia apagar de verdade, pelo botao
+        // Limpar, o registro que ainda estava inteiro. Recontar aqui custa uma leitura.
+        eventos = contarEventos(arquivo)
         etiqueta = definirEtiqueta()
         etiquetaVisivel = etiqueta
         emPrimeiroPlano()
@@ -509,6 +514,22 @@ class CaptureService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+
+    /** Quantas linhas ja ha no arquivo. Lido em fluxo: o registro de um dia nao cabe de uma vez. */
+    private fun contarEventos(alvo: File): Int = try {
+        if (!alvo.exists()) 0 else alvo.inputStream().buffered().use { entrada ->
+            var total = 0
+            val balde = ByteArray(65536)
+            while (true) {
+                val n = entrada.read(balde)
+                if (n < 0) break
+                for (i in 0 until n) if (balde[i] == '\n'.code.toByte()) total++
+            }
+            total
+        }
+    } catch (e: Exception) {
+        0
+    }
 
     /**
      * Entrega o arquivo inteiro quando a tela pede, com alvo fixo e fim reconhecivel.
