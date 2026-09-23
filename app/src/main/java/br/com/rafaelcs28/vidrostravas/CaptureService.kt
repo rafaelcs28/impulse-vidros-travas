@@ -40,6 +40,7 @@ class CaptureService : Service() {
     private var enviando = true
 
     private lateinit var arquivo: File
+    private val travaDoArquivo = Any()
 
     /**
      * Etiqueta curta desta instalacao, sorteada uma vez e guardada.
@@ -532,6 +533,11 @@ class CaptureService : Service() {
         Thread({ atenderReenvios() }, "reenvio").apply { isDaemon = true }.start()
         Thread({ vigiarConexao() }, "vigia").apply { isDaemon = true }.start()
         Thread({ sondarImpulse() }, "sonda").apply { isDaemon = true }.start()
+        // O log do Impulse e do Shizuku, lido daqui: a captura conta o que houve DENTRO do Impulse
+        // sem depender da versao dele nem de mexer nela. Ver ColetorDeLog.
+        ColetorDeLog.iniciar(this, { arquivo.length() }) { tipo, dados ->
+            anotar(tipo, dados, aoVivo = false, naTela = false)
+        }
         Thread({ conectarComInsistencia() }, "conexao").apply { isDaemon = true }.start()
     }
 
@@ -786,6 +792,7 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         enviando = false
+        ColetorDeLog.parar()
         try {
             listener?.let { control?.unRegisterDataChangedListener(packageName, it) }
         } catch (e: Exception) {
@@ -849,7 +856,10 @@ class CaptureService : Service() {
                 if (key == null) return
                 // Trancar e desligar sao os instantes em que o vidro deveria subir: pede a medida
                 // agora, em vez de esperar a proxima volta da sonda.
-                if (key in GATILHOS_DE_SONDA) momentoDecisivo.set(true)
+                if (key in GATILHOS_DE_SONDA) {
+                    momentoDecisivo.set(true)
+                    ColetorDeLog.marcarMomento("anuncio de " + key.substringAfterLast('.') + "=" + (value ?: ""))
+                }
                 // Grandeza analogica e o chassi inteiro nao entram nem no arquivo.
                 if (key in RUIDO) return
                 // Do que sobra, o arquivo leva tudo e o canal ao vivo leva o assunto: mandar o
@@ -948,7 +958,12 @@ class CaptureService : Service() {
         }
     }
 
-    private fun anotar(tipo: String, dados: Map<String, String>, aoVivo: Boolean = true) {
+    private fun anotar(
+        tipo: String,
+        dados: Map<String, String>,
+        aoVivo: Boolean = true,
+        naTela: Boolean = true
+    ) {
         val agora = System.currentTimeMillis()
         val hora = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(agora))
         val sb = StringBuilder()
@@ -961,12 +976,21 @@ class CaptureService : Service() {
         sb.append("}")
         val linha = sb.toString()
         eventos++
-        val cauda = (ultimos + (hora + "  " + dados.entries.joinToString(" ") { it.key.substringAfterLast('.') + "=" + it.value })).takeLast(12)
-        ultimos = cauda
-        try {
-            arquivo.appendText(linha + "\n")
-        } catch (e: Exception) {
-            Log.w(TAG, "nao consegui gravar", e)
+        // Linha de log do Impulse nao vai para a tela: chegam dezenas por minuto e empurrariam
+        // para fora justamente as mudancas do carro, que e o que a pessoa olha ali.
+        if (naTela) {
+            val cauda = (ultimos + (hora + "  " + dados.entries.joinToString(" ") { it.key.substringAfterLast('.') + "=" + it.value })).takeLast(12)
+            ultimos = cauda
+        }
+        // Sincronizado: quatro threads gravam aqui - o ouvinte do carro, a sonda, o vigia e o
+        // coletor de log, este ultimo com volume alto. Sem trava, duas linhas podem sair
+        // intercaladas e o arquivo deixa de ser lido linha a linha.
+        synchronized(travaDoArquivo) {
+            try {
+                arquivo.appendText(linha + "\n")
+            } catch (e: Exception) {
+                Log.w(TAG, "nao consegui gravar", e)
+            }
         }
         if (aoVivo) fila.offer(linha)
     }
