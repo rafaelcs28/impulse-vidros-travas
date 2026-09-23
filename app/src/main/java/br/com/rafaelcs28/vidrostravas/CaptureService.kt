@@ -70,6 +70,28 @@ class CaptureService : Service() {
         /** Ritmo da sonda de atuacao: e transacao de binder, nao custa quase nada. */
         private const val ESPERA_SONDA_MS = 60000L
 
+        /** Volta do laco da sonda. Curto so para atender na hora o pedido de amostra. */
+        private const val PASSO_SONDA_MS = 3000L
+
+        /** De quanto em quanto a sonda registra mesmo sem mudanca, para ancorar a linha do tempo. */
+        private const val ESPERA_ANCORA_MS = 900000L
+
+        /**
+         * Pedido de amostra no instante que interessa.
+         *
+         * O defeito que se investiga aparece num momento exato - a pessoa tranca o carro e o vidro
+         * nao sobe. Uma sonda de minuto em minuto quase sempre erraria esse instante por algumas
+         * dezenas de segundos, e "estava bem um minuto antes" e uma resposta pior do que parece.
+         * Quando a tranca ou o desligamento sao anunciados, a sonda e chamada na hora.
+         */
+        private val momentoDecisivo = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        /** Chaves cujo anuncio marca a hora de medir a atuacao. */
+        private val GATILHOS_DE_SONDA = setOf(
+            "car.basic.door_lock_status",
+            "car.basic.driving_ready_state"
+        )
+
         /**
          * Ritmo da leitura da configuracao do Impulse.
          *
@@ -672,14 +694,33 @@ class CaptureService : Service() {
      */
     private fun sondarImpulse() {
         var ateConfiguracao = 0L
+        var ateSonda = 0L
+        var ateAncora = 0L
         while (enviando) {
             try {
-                Thread.sleep(ESPERA_SONDA_MS)
-
-                val mudou = SondaImpulse.rodada()
-                if (mudou.isNotEmpty()) anotar("atuacao", mudou)
-
+                // Passo curto para conseguir atender o pedido de amostra na hora, sem acordar a
+                // sonda de verdade a cada volta.
+                Thread.sleep(PASSO_SONDA_MS)
                 val agora = System.currentTimeMillis()
+
+                val naHora = momentoDecisivo.getAndSet(false)
+                val noRitmo = agora - ateSonda >= ESPERA_SONDA_MS
+                if (!naHora && !noRitmo) continue
+                ateSonda = agora
+
+                // Ancora: de tempos em tempos registra mesmo sem mudanca, para a linha do tempo ter
+                // pontos de apoio. Sem isso, um carro que ja comeca quebrado produz uma linha no
+                // inicio e mais nada, e nao da para dizer se continuava assim uma hora depois.
+                val ancorar = agora - ateAncora >= ESPERA_ANCORA_MS
+                if (ancorar) ateAncora = agora
+
+                val mudou = SondaImpulse.rodada(forcar = naHora || ancorar)
+                if (mudou.isNotEmpty()) {
+                    val dados = LinkedHashMap(mudou)
+                    if (naHora) dados["motivo"] = "trancou/desligou"
+                    anotar("atuacao", dados)
+                }
+
                 if (agora - ateConfiguracao >= ESPERA_CONFIGURACAO_MS) {
                     ateConfiguracao = agora
                     val config = SondaImpulse.configuracao()
@@ -687,7 +728,11 @@ class CaptureService : Service() {
                 }
             } catch (e: InterruptedException) {
                 return
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                // Throwable, e nao Exception: o defeito que se mede aqui se manifesta como
+                // OutOfMemoryError vindo do servidor do Shizuku, que NAO e uma Exception. Deixar
+                // escapar mataria esta thread em silencio exatamente no instante do defeito, e a
+                // captura chegaria sem a unica medida que interessa.
                 Log.w(TAG, "sonda falhou", e)
             }
         }
@@ -775,6 +820,9 @@ class CaptureService : Service() {
         val ouvinte = object : IListener.Stub() {
             override fun onDataChanged(key: String?, value: String?) {
                 if (key == null) return
+                // Trancar e desligar sao os instantes em que o vidro deveria subir: pede a medida
+                // agora, em vez de esperar a proxima volta da sonda.
+                if (key in GATILHOS_DE_SONDA) momentoDecisivo.set(true)
                 // Grandeza analogica e o chassi inteiro nao entram nem no arquivo.
                 if (key in RUIDO) return
                 // Do que sobra, o arquivo leva tudo e o canal ao vivo leva o assunto: mandar o

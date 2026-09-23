@@ -88,14 +88,18 @@ object SondaImpulse {
     @Volatile
     private var ultimaConfiguracao: String = ""
 
+    @Volatile
+    private var ultimoTesteDeShellMs = 0L
+
     /**
      * Uma rodada da sonda. Devolve o que mudou, ou vazio quando esta tudo igual ao anterior.
      *
      * Devolver vazio quando nada muda e deliberado: a captura de um dia inteiro precisa caber num
      * envio, e uma linha por minuto dizendo "continua tudo bem" enche o arquivo com o que ja se
-     * sabe. O que interessa e o instante da virada.
+     * sabe. O que interessa e o instante da virada — e por isso `forcar`, que marca a hora certa:
+     * o momento de trancar o carro, que e quando o vidro deveria subir.
      */
-    fun rodada(): Map<String, String> {
+    fun rodada(forcar: Boolean = false): Map<String, String> {
         val shizukuVivo = try {
             rikka.shizuku.Shizuku.pingBinder()
         } catch (e: Throwable) {
@@ -109,17 +113,54 @@ object SondaImpulse {
 
         val velho = testar(vehicleGuardado)
         val novo = testar(pedirVehicle())
+        val servidor = marcaDoServidor()
 
         val estado = "shizuku=" + (if (shizukuVivo) "vivo" else "morto") +
-            " guardado=" + velho + " novo=" + novo
-        if (estado == ultimoEstado) return emptyMap()
+            " guardado=" + velho + " novo=" + novo + " servidor=" + servidor
+        if (estado == ultimoEstado && !forcar) return emptyMap()
         ultimoEstado = estado
 
-        return linkedMapOf(
+        val saida = linkedMapOf(
             "shizuku" to (if (shizukuVivo) "vivo" else "morto"),
             "atuacao_guardada" to velho,
-            "atuacao_nova" to novo
+            "atuacao_nova" to novo,
+            "servidor" to servidor
         )
+        // So quando ja ha falha: separa "o Shizuku nao serve mais comando" de "o Shizuku nao serve
+        // mais transacao". As duas coisas quebram juntas se o heap dele entupiu, e e essa a
+        // diferenca entre religar o Shizuku e so renovar o binder. Raro de proposito: este teste
+        // gasta um comando, e comando e o que entope.
+        if (velho != "ok(4)" || novo != "ok(4)") {
+            saida["shell"] = testarShell()
+        }
+        return saida
+    }
+
+    /**
+     * Identidade do servidor do Shizuku a que estamos ligados.
+     *
+     * E o que separa os dois defeitos de sintoma identico. Se esta marca MUDA entre duas rodadas, o
+     * servidor reiniciou, e um embrulho pego antes disso ficou para tras — renovar resolve. Se ela
+     * NAO muda e mesmo assim as chamadas falham, e o mesmo servidor de sempre recusando tudo, e
+     * renovar nao vai adiantar nada: so religar o Shizuku. Sai de graca, sem gastar comando.
+     */
+    private fun marcaDoServidor(): String = try {
+        val b = rikka.shizuku.Shizuku.getBinder()
+        if (b == null) "nenhum" else Integer.toHexString(System.identityHashCode(b))
+    } catch (e: Throwable) {
+        "erro"
+    }
+
+    private fun testarShell(): String {
+        val agora = System.currentTimeMillis()
+        if (agora - ultimoTesteDeShellMs < 300_000L) return "nao_testado"
+        ultimoTesteDeShellMs = agora
+        return try {
+            val r = CaptureService.rodarComandoShizuku(arrayOf("sh", "-c", "echo vivo"))
+            if (r.contains("vivo")) "ok" else "vazio"
+        } catch (e: Throwable) {
+            e.javaClass.simpleName
+        }
     }
 
     /**
