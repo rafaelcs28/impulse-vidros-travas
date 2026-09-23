@@ -128,8 +128,11 @@ class MainActivity : Activity() {
         // trava na autorizacao aparece daqui como travada, e nao como inexistente.
         CaptureService.avisarAbertura(this)
 
-        // Uma vez por abertura. O aplicativo sobe junto com a central, entao e uma por partida.
-        Atualizador.verificarUmaVez { runOnUiThread { mostrarBotaoDeAtualizacao() } }
+        // A descoberta vive no processo, a tela nao: sem isto, uma versao ja encontrada por uma
+        // abertura anterior ficava sabida e invisivel, e o botao so apareceria se a consulta
+        // acontecesse de novo exatamente nesta tela.
+        mostrarBotaoDeAtualizacao()
+        Atualizador.verificar { runOnUiThread { mostrarBotaoDeAtualizacao() } }
 
         Shizuku.addRequestPermissionResultListener(aoResponder)
         pedirAutorizacao()

@@ -30,7 +30,10 @@ object Atualizador {
         private set
 
     @Volatile
-    private var jaVerificou = false
+    private var verificando = false
+
+    @Volatile
+    private var ultimaConsultaMs = 0L
 
     @Volatile
     var estado: String = ""
@@ -53,10 +56,21 @@ object Atualizador {
         return false
     }
 
-    /** Verifica uma vez por abertura, numa thread própria. Falha em silêncio: é um extra. */
-    fun verificarUmaVez(aoDescobrir: () -> Unit) {
-        if (jaVerificou) return
-        jaVerificou = true
+    /**
+     * Consulta a cada abertura da tela, numa thread própria. Falha em silêncio: é um extra.
+     *
+     * Já foi uma vez por processo, e nesta central isso equivalia a uma vez por instalação: o
+     * aplicativo mantém serviço em primeiro plano, então fechar a tela não mata o processo, e quem
+     * fechava e abria continuava vendo a resposta da primeira consulta — feita, às vezes, dias
+     * antes. A trava curta abaixo serve só para telas recriadas em sequência; abrir o aplicativo de
+     * verdade consulta sempre.
+     */
+    fun verificar(aoDescobrir: () -> Unit) {
+        if (verificando) return
+        val agora = System.currentTimeMillis()
+        if (agora - ultimaConsultaMs < 10_000L) return
+        verificando = true
+        ultimaConsultaMs = agora
         Thread {
             try {
                 val tag = ultimaTagPublicada() ?: return@Thread
@@ -68,11 +82,22 @@ object Atualizador {
                 }
             } catch (e: Throwable) {
                 Log.w(TAG, "verificacao de atualizacao falhou", e)
+            } finally {
+                verificando = false
             }
         }.start()
     }
 
-    private fun ultimaTagPublicada(): String? {
+    /**
+     * Descobre a última versão publicada, com dois caminhos.
+     *
+     * A API anônima do GitHub tem teto por hora e por endereço, e quem usa isto está numa rede
+     * qualquer, que pode já ter gastado o teto. Quando ela recusa, a página de "releases/latest"
+     * continua respondendo, e o endereço para onde ela redireciona já carrega a versão no caminho.
+     */
+    private fun ultimaTagPublicada(): String? = pelaApi() ?: peloRedirecionamento()
+
+    private fun pelaApi(): String? {
         var conn: HttpURLConnection? = null
         return try {
             // O repositório é público, então a API responde sem credencial. Sem token de propósito:
@@ -88,6 +113,27 @@ object Atualizador {
             Regex("\"tag_name\"\\s*:\\s*\"([^\"]+)\"").find(corpo)?.groupValues?.get(1)
         } catch (e: Throwable) {
             Log.w(TAG, "nao consegui consultar a ultima versao", e)
+            null
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    private fun peloRedirecionamento(): String? {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = URL("https://github.com/$REPO/releases/latest")
+                .openConnection() as HttpURLConnection
+            conn.instanceFollowRedirects = false
+            conn.requestMethod = "HEAD"
+            conn.connectTimeout = 10000
+            conn.readTimeout = 15000
+            conn.setRequestProperty("User-Agent", "impulse-vidros-travas")
+            val destino = conn.getHeaderField("Location") ?: return null
+            val tag = destino.substringAfterLast("/tag/", "")
+            if (tag.isBlank()) null else tag
+        } catch (e: Throwable) {
+            Log.w(TAG, "redirecionamento tambem nao respondeu", e)
             null
         } finally {
             conn?.disconnect()
