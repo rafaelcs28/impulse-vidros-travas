@@ -67,6 +67,19 @@ class CaptureService : Service() {
         /** De quanto em quanto o vigia confere se a ligacao com o carro ainda responde. */
         private const val ESPERA_VIGIA_MS = 30000L
 
+        /** Ritmo da sonda de atuacao: e transacao de binder, nao custa quase nada. */
+        private const val ESPERA_SONDA_MS = 60000L
+
+        /**
+         * Ritmo da leitura da configuracao do Impulse.
+         *
+         * Raro de proposito: cada leitura e um comando no Shizuku, e comando no Shizuku vaza alguns
+         * kilobytes contra um heap de 96 MB. A cada dez minutos sao seis por hora, que nao movem o
+         * ponteiro; a cada minuto ja seriam sessenta, e a ferramenta passaria a empurrar o carro
+         * para o defeito que veio medir.
+         */
+        private const val ESPERA_CONFIGURACAO_MS = 600000L
+
         /** Teto por POST: acima disso o ntfy recusa a mensagem. */
         private const val CORPO_MAX = 1800
 
@@ -491,6 +504,7 @@ class CaptureService : Service() {
         Thread({ remetente() }, "envio").apply { isDaemon = true }.start()
         Thread({ atenderReenvios() }, "reenvio").apply { isDaemon = true }.start()
         Thread({ vigiarConexao() }, "vigia").apply { isDaemon = true }.start()
+        Thread({ sondarImpulse() }, "sonda").apply { isDaemon = true }.start()
         Thread({ conectarComInsistencia() }, "conexao").apply { isDaemon = true }.start()
     }
 
@@ -617,6 +631,43 @@ class CaptureService : Service() {
                 return
             } catch (e: Exception) {
                 Log.w(TAG, "vigia falhou", e)
+            }
+        }
+    }
+
+    /**
+     * Acompanha se ATUAR no carro ainda funcionaria, e em que configuracao do Impulse.
+     *
+     * A captura ate aqui respondia "o que o carro informou". Falta a outra metade: no relato de
+     * campo o carro informa tudo certinho - a tranca chega, a velocidade chega - e mesmo assim o
+     * vidro nao sobe. Sem medir a atuacao, esse caso chega como um registro impecavel de um defeito
+     * invisivel. Ver SondaImpulse para o porque.
+     *
+     * Dois ritmos diferentes, por um motivo concreto. O teste dos binders e uma transacao e nao
+     * custa nada, entao roda de minuto em minuto e pega o instante da virada. A leitura da
+     * configuracao custa um comando no Shizuku, e comando no Shizuku e exatamente o que vaza memoria
+     * e o mata: uma ferramenta de diagnostico que rodasse isso a cada minuto provocaria o defeito
+     * que veio investigar.
+     */
+    private fun sondarImpulse() {
+        var ateConfiguracao = 0L
+        while (enviando) {
+            try {
+                Thread.sleep(ESPERA_SONDA_MS)
+
+                val mudou = SondaImpulse.rodada()
+                if (mudou.isNotEmpty()) anotar("atuacao", mudou)
+
+                val agora = System.currentTimeMillis()
+                if (agora - ateConfiguracao >= ESPERA_CONFIGURACAO_MS) {
+                    ateConfiguracao = agora
+                    val config = SondaImpulse.configuracao()
+                    if (config.isNotEmpty()) anotar("impulse_config", config)
+                }
+            } catch (e: InterruptedException) {
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "sonda falhou", e)
             }
         }
     }

@@ -12,6 +12,7 @@ import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import rikka.shizuku.Shizuku
@@ -34,6 +35,8 @@ class MainActivity : Activity() {
 
     /** Botao que so existe quando ha versao nova; fica no topo, destacado. */
     private var botaoAtualizar: Button? = null
+    private var barra: ProgressBar? = null
+    private var andamento: TextView? = null
     private var atualizando = false
 
     private val aoResponder = Shizuku.OnRequestPermissionResultListener { pedido, resultado ->
@@ -78,6 +81,23 @@ class MainActivity : Activity() {
             setOnClickListener { instalarAtualizacao() }
         }
         raiz.addView(botaoAtualizar)
+
+        // Progresso em views proprias, e nao na linha de status: a linha de status e reescrita a
+        // cada segundo com o andamento da captura, entao os avisos da atualizacao apareciam e eram
+        // apagados antes de dar tempo de ler. De fora parecia que o toque no botao nao surtiu efeito.
+        barra = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            visibility = android.view.View.GONE
+        }
+        raiz.addView(barra)
+
+        andamento = TextView(this).apply {
+            textSize = 15f
+            setTextColor(Color.parseColor("#4ade80"))
+            visibility = android.view.View.GONE
+            setPadding(0, 4, 0, 8)
+        }
+        raiz.addView(andamento)
 
         status = TextView(this).apply {
             textSize = 16f
@@ -276,14 +296,33 @@ class MainActivity : Activity() {
         if (atualizando) return
         atualizando = true
         botaoAtualizar?.isEnabled = false
-        status.text = "preparando a atualizacao..."
+        botaoAtualizar?.text = "atualizando..."
+        barra?.apply {
+            isIndeterminate = true
+            progress = 0
+            visibility = android.view.View.VISIBLE
+        }
+        andamento?.apply {
+            text = "preparando..."
+            visibility = android.view.View.VISIBLE
+        }
         Thread {
-            val erro = Atualizador.baixarEInstalar(applicationContext) { passo ->
-                runOnUiThread { status.text = passo }
+            val erro = Atualizador.baixarEInstalar(applicationContext) { passo, pct ->
+                runOnUiThread {
+                    andamento?.text = passo
+                    if (pct == Atualizador.INDEFINIDO) {
+                        barra?.isIndeterminate = true
+                    } else {
+                        barra?.isIndeterminate = false
+                        barra?.progress = pct
+                    }
+                }
             }
             runOnUiThread {
                 atualizando = false
                 botaoAtualizar?.isEnabled = true
+                barra?.visibility = android.view.View.GONE
+                andamento?.visibility = android.view.View.GONE
                 if (erro == null) {
                     botaoAtualizar?.visibility = android.view.View.GONE
                     avisar(
@@ -292,6 +331,9 @@ class MainActivity : Activity() {
                             "O que ja foi capturado continua aqui."
                     )
                 } else {
+                    // Devolve o rotulo com a versao: deixar "atualizando..." num botao parado diria
+                    // que ainda esta acontecendo alguma coisa.
+                    mostrarBotaoDeAtualizacao()
                     avisar("Nao consegui atualizar", erro)
                 }
             }

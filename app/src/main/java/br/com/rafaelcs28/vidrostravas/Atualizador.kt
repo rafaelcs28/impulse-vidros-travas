@@ -145,20 +145,48 @@ object Atualizador {
      *
      * Roda FORA da thread principal; quem chama cuida disso.
      */
-    fun baixarEInstalar(context: Context, progresso: (String) -> Unit): String? {
+    fun baixarEInstalar(context: Context, aoAndar: (String, Int) -> Unit): String? {
         try {
-            progresso("baixando...")
+            aoAndar("conectando...", INDEFINIDO)
             val destino = File(context.cacheDir, "atualizacao.apk")
-            val baixado = baixar(destino) ?: return "não consegui baixar o arquivo"
-            progresso("instalando...")
-            return instalar(baixado)
+            val baixado = baixar(destino, aoAndar) ?: return "não consegui baixar o arquivo"
+
+            // A instalacao nao tem percentual para informar - o `pm` so responde no fim - e ela
+            // demora o suficiente para parecer travada. O relogio abaixo existe so para provar que
+            // ainda esta viva: sem ele, a barra indefinida e o silencio se parecem demais, e a
+            // pessoa toca de novo achando que o primeiro toque nao pegou.
+            aoAndar("instalando...", INDEFINIDO)
+            val relogio = Thread {
+                val inicio = System.currentTimeMillis()
+                try {
+                    while (true) {
+                        Thread.sleep(1000)
+                        val s = (System.currentTimeMillis() - inicio) / 1000
+                        aoAndar("instalando...  " + s + "s", INDEFINIDO)
+                    }
+                } catch (e: InterruptedException) {
+                    // fim normal: a instalacao terminou
+                }
+            }
+            relogio.isDaemon = true
+            relogio.start()
+            try {
+                return instalar(baixado)
+            } finally {
+                relogio.interrupt()
+            }
         } catch (e: Throwable) {
             Log.e(TAG, "atualizacao falhou", e)
             return e.message ?: e.javaClass.simpleName
         }
     }
 
-    private fun baixar(destino: File): File? {
+    /** Percentual desconhecido: a barra gira em vez de encher. */
+    const val INDEFINIDO = -1
+
+    private fun emMb(bytes: Long): String = String.format("%.1f MB", bytes / 1048576.0)
+
+    private fun baixar(destino: File, aoAndar: (String, Int) -> Unit): File? {
         var conn: HttpURLConnection? = null
         return try {
             // Mesmo endereço fixo do link que as pessoas já usam: o GitHub resolve sempre para a
@@ -169,9 +197,35 @@ object Atualizador {
             conn.connectTimeout = 15000
             conn.readTimeout = 120000
             if (conn.responseCode !in 200..299) return null
+
+            val total = conn.contentLength.toLong()
+            var lidos = 0L
+            var ultimoAviso = 0L
             destino.outputStream().use { saida ->
-                conn.inputStream.use { entrada -> entrada.copyTo(saida) }
+                conn.inputStream.use { entrada ->
+                    val balde = ByteArray(16384)
+                    while (true) {
+                        val n = entrada.read(balde)
+                        if (n < 0) break
+                        saida.write(balde, 0, n)
+                        lidos += n
+                        // Com folga entre avisos: a central e lenta, e mandar um recado por bloco
+                        // faria a tela trabalhar mais do que o download.
+                        val agora = System.currentTimeMillis()
+                        if (agora - ultimoAviso < 200) continue
+                        ultimoAviso = agora
+                        if (total > 0) {
+                            val pct = ((lidos * 100) / total).toInt()
+                            aoAndar("baixando " + pct + "%   " + emMb(lidos) + " de " + emMb(total), pct)
+                        } else {
+                            // Sem Content-Length nao da para calcular percentual; o tamanho ja
+                            // baixado ainda mostra que esta andando.
+                            aoAndar("baixando " + emMb(lidos), INDEFINIDO)
+                        }
+                    }
+                }
             }
+            aoAndar("baixado", 100)
             if (destino.length() < 100_000) null else destino
         } catch (e: Throwable) {
             Log.e(TAG, "download falhou", e)
