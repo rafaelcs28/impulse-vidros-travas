@@ -97,6 +97,17 @@ object Atualizador {
      */
     private fun ultimaTagPublicada(): String? = pelaApi() ?: peloRedirecionamento()
 
+    /** A mesma consulta, para a atualizacao em segundo plano. Roda FORA da thread principal. */
+    fun consultarUltimaVersao(): String? = ultimaTagPublicada()
+
+    /**
+     * Uma instalacao por vez. Agora ha dois caminhos que instalam - o botao verde e a atualizacao
+     * em segundo plano - e dois `pm install` do mesmo pacote ao mesmo tempo nao terminam bem.
+     */
+    @Volatile
+    var instalando = false
+        private set
+
     private fun pelaApi(): String? {
         var conn: HttpURLConnection? = null
         return try {
@@ -146,6 +157,10 @@ object Atualizador {
      * Roda FORA da thread principal; quem chama cuida disso.
      */
     fun baixarEInstalar(context: Context, aoAndar: (String, Int) -> Unit): String? {
+        synchronized(this) {
+            if (instalando) return "ja existe uma atualizacao em andamento"
+            instalando = true
+        }
         try {
             aoAndar("conectando...", INDEFINIDO)
             val destino = File(context.cacheDir, "atualizacao.apk")
@@ -178,6 +193,8 @@ object Atualizador {
         } catch (e: Throwable) {
             Log.e(TAG, "atualizacao falhou", e)
             return e.message ?: e.javaClass.simpleName
+        } finally {
+            instalando = false
         }
     }
 

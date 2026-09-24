@@ -68,6 +68,18 @@ class CaptureService : Service() {
         /** De quanto em quanto o vigia confere se a ligacao com o carro ainda responde. */
         private const val ESPERA_VIGIA_MS = 30000L
 
+        /**
+         * Ritmo da atualizacao em segundo plano.
+         *
+         * A primeira checagem espera a partida passar: o comeco de um ciclo e justamente um trecho
+         * que se quer capturar inteiro, e instalar reinicia o app. Depois, de tres em tres horas -
+         * a consulta e anonima ao GitHub, que tem teto por hora e por rede.
+         */
+        private const val PRIMEIRA_CHECAGEM_MS = 10L * 60_000L
+        private const val INTERVALO_CHECAGEM_MS = 3L * 60L * 60_000L
+        private const val ESPERA_OCUPADO_MS = 60_000L
+        private const val ESPERA_APOS_FALHA_MS = 60L * 60_000L
+
         /** Ritmo da sonda de atuacao: e transacao de binder, nao custa quase nada. */
         private const val ESPERA_SONDA_MS = 60000L
 
@@ -575,6 +587,7 @@ class CaptureService : Service() {
         Thread({ vigiarConexao() }, "vigia").apply { isDaemon = true }.start()
         Thread({ sondarImpulse() }, "sonda").apply { isDaemon = true }.start()
         Thread({ atenderFotos() }, "foto").apply { isDaemon = true }.start()
+        Thread({ atualizarSozinho() }, "auto-atualizacao").apply { isDaemon = true }.start()
         // O log do Impulse e do Shizuku, lido daqui: a captura conta o que houve DENTRO do Impulse
         // sem depender da versao dele nem de mexer nela. Ver ColetorDeLog.
         ColetorDeLog.iniciar(this, { arquivo.length() }) { tipo, dados ->
@@ -757,6 +770,62 @@ class CaptureService : Service() {
                 return
             } catch (e: Exception) {
                 Log.w(TAG, "vigia falhou", e)
+            }
+        }
+    }
+
+    /**
+     * Atualiza sozinho, sem ninguem precisar tocar no botao verde.
+     *
+     * Existe porque o botao so aparece quando a tela e aberta, e a captura roda em segundo plano:
+     * em 24/09, com a 1.27 publicada, nenhum testador tinha atualizado - ninguem tinha aberto o app.
+     *
+     * Nunca instala no meio de um envio ou da fotografia do botao laranja: instalar mata o processo,
+     * e seria perder justamente o que alguem pediu para mandar. Quem religa a captura depois e o
+     * aviso de app substituido, no BootReceiver.
+     *
+     * O risco que isto cria e real: uma versao com defeito chega a todos sozinha, e se ela quebrar
+     * ao abrir, nem a atualizacao seguinte roda. Por isso toda versao passa primeiro pelo carro do
+     * dono antes de ser publicada.
+     */
+    private fun atualizarSozinho() {
+        try {
+            Thread.sleep(PRIMEIRA_CHECAGEM_MS)
+        } catch (e: InterruptedException) {
+            return
+        }
+        while (enviando) {
+            var espera = INTERVALO_CHECAGEM_MS
+            try {
+                val tag = Atualizador.consultarUltimaVersao()
+                val atual = BuildConfig.VERSION_NAME
+                if (tag != null && Atualizador.maisNova(tag, atual)) {
+                    val ocupado = envioAtivo || fotoAtiva || pedidoDeReenvio || pedidoDeFoto ||
+                        Atualizador.instalando
+                    if (ocupado) {
+                        espera = ESPERA_OCUPADO_MS
+                    } else {
+                        val para = tag.removePrefix("v")
+                        anotar("atualizacao_automatica", mapOf("de" to atual, "para" to para, "etapa" to "instalando"))
+                        val erro = Atualizador.baixarEInstalar(applicationContext) { _, _ -> }
+                        // Dando certo, o processo morre logo depois do `pm install`. Chegar aqui
+                        // com sucesso so significa que a morte ainda nao chegou.
+                        if (erro == null) {
+                            anotar("atualizacao_automatica", mapOf("de" to atual, "para" to para, "etapa" to "instalada, reiniciando"))
+                        } else {
+                            anotar("atualizacao_automatica", mapOf("de" to atual, "para" to para, "etapa" to "falhou", "erro" to erro.take(200)))
+                            espera = ESPERA_APOS_FALHA_MS
+                        }
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "atualizacao automatica falhou", e)
+                espera = ESPERA_APOS_FALHA_MS
+            }
+            try {
+                Thread.sleep(espera)
+            } catch (e: InterruptedException) {
+                return
             }
         }
     }

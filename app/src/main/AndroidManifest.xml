@@ -44,6 +44,9 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <!-- Religa a captura depois da atualizacao em segundo plano: instalar mata o
+                     processo antigo, e ninguem vai reabrir o app para ela voltar. -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

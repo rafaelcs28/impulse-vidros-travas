@@ -18,6 +18,24 @@ class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent?) {
         val acao = intent?.action ?: return
+
+        // Acabou de ser substituido por uma versao nova - quase sempre a atualizacao em segundo
+        // plano. Instalar mata o processo antigo, e sem isto a captura ficaria parada ate a proxima
+        // partida do carro, sem ninguem saber.
+        //
+        // Sobe SEM checar o Shizuku, de proposito, ao contrario da partida: o processo e novo e o
+        // Shizuku ainda nao entregou a conexao, entao a checagem daria "nao esta rodando" e barraria
+        // a religada exatamente aqui. Se o app conseguiu se atualizar, e porque tinha a
+        // autorizacao; e o proprio servico insiste ate o Shizuku responder.
+        if (acao == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            try {
+                context.startService(Intent(context, CaptureService::class.java))
+            } catch (e: Exception) {
+                Log.w("CapturaVidros", "religar depois da atualizacao falhou", e)
+            }
+            return
+        }
+
         if (acao != Intent.ACTION_BOOT_COMPLETED && acao != "android.intent.action.QUICKBOOT_POWERON") return
         try {
             // Sem autorizacao do Shizuku nao ha o que capturar, e subir o servico so para falhar
