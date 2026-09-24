@@ -1168,8 +1168,28 @@ class CaptureService : Service() {
         if (aoVivo) fila.offer(linha)
     }
 
-    private fun escapar(s: String): String =
-        s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ")
+    /**
+     * Escapa para JSON, TODOS os caracteres de controle - nao so aspas, barra e quebra de linha.
+     *
+     * O JSON proibe controle cru dentro de texto, e leitor estrito recusa a linha inteira. Tratava
+     * so os quatro de sempre, e bastou o coletor de log entrar: o logcat usa tabulacao nas pilhas
+     * de excecao, e a primeira captura com o botao "O Impulse travou" veio com oito linhas que um
+     * leitor estrito nao abria.
+     */
+    private fun escapar(s: String): String {
+        val sb = StringBuilder(s.length + 8)
+        for (c in s) {
+            when {
+                c == '\\' -> sb.append("\\\\")
+                c == '"' -> sb.append("\\\"")
+                c == '\n' || c == '\r' -> sb.append(' ')
+                c == '\t' -> sb.append("\\t")
+                c < ' ' -> sb.append(String.format(Locale.US, "\\u%04x", c.code))
+                else -> sb.append(c)
+            }
+        }
+        return sb.toString()
+    }
 
     /**
      * Manda em lotes a cada dois segundos. Em lote porque uma mensagem por mudanca afogaria o canal
