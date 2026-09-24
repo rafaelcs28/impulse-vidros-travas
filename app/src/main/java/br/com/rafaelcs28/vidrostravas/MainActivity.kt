@@ -44,6 +44,24 @@ class MainActivity : Activity() {
     private var textoAutorizacao: TextView? = null
     private var botaoAutorizacao: Button? = null
     private var situacaoMostrada = ""
+
+    /** "O Impulse travou": progresso em view propria, pela mesma razao dos outros avisos. */
+    private var andamentoFoto: TextView? = null
+    private var barraFoto: ProgressBar? = null
+    private var botaoTravou: Button? = null
+    private var marcoFoto = 0L
+
+    /** 1 = tirando a fotografia; 2 = enviando a captura. 0 = parado. */
+    private var etapaTravou = 0
+    private var fotoTerminouEm = 0L
+    private var resultadoFoto = ""
+    private var progressoTravou = 0
+    private val tiqueTravou = object : Runnable {
+        override fun run() {
+            acompanharTravou()
+            if (etapaTravou != 0) handler.postDelayed(this, 250)
+        }
+    }
     private var atualizando = false
 
     private val aoResponder = Shizuku.OnRequestPermissionResultListener { pedido, resultado ->
@@ -170,6 +188,29 @@ class MainActivity : Activity() {
             }
         })
         raiz.addView(botoes)
+
+        // Botao proprio, grande e de outra cor: quem o usa esta no meio do defeito, as vezes
+        // dirigindo, e nao pode ter que procurar. Tem que ser tocado ANTES de limpar o cache -
+        // limpar reinicia o Impulse e leva junto a prova do que estava preso.
+        botaoTravou = Button(this).apply {
+            text = "O Impulse travou — capturar agora"
+            setBackgroundColor(Color.parseColor("#fb923c"))
+            setTextColor(Color.parseColor("#1a0d05"))
+            setOnClickListener { impulseTravou() }
+        }
+        raiz.addView(botaoTravou)
+        barraFoto = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            visibility = android.view.View.GONE
+        }
+        raiz.addView(barraFoto)
+        andamentoFoto = TextView(this).apply {
+            textSize = 15f
+            setTextColor(Color.parseColor("#fdba74"))
+            visibility = android.view.View.GONE
+            setPadding(0, 6, 0, 10)
+        }
+        raiz.addView(andamentoFoto)
 
         registro = TextView(this).apply {
             textSize = 13f
@@ -398,6 +439,127 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             avisar("Não consegui abrir o " + nome, e.message ?: e.javaClass.simpleName)
         }
+    }
+
+    private fun impulseTravou() {
+        if (CaptureService.fotoAtiva || etapaTravou != 0) return
+        if (CaptureService.estado == "parado") {
+            avisar("A captura não está rodando", "Autorize o Shizuku primeiro — o painel amarelo no topo diz como.")
+            return
+        }
+        etapaTravou = 1
+        marcoFoto = System.currentTimeMillis()
+        resultadoFoto = ""
+        progressoTravou = 3
+        botaoTravou?.isEnabled = false
+        barraFoto?.apply {
+            progress = progressoTravou
+            visibility = android.view.View.VISIBLE
+        }
+        andamentoFoto?.apply {
+            text = "registrando o estado do Impulse..."
+            visibility = android.view.View.VISIBLE
+        }
+        CaptureService.pedirFotoDoImpulse()
+        handler.removeCallbacks(tiqueTravou)
+        handler.post(tiqueTravou)
+    }
+
+    /**
+     * Anda a barra do toque ate a captura estar ENVIADA, e so entao avisa.
+     *
+     * Antes o aviso de pronto aparecia quando a fotografia terminava, com o envio da captura ainda
+     * correndo por tras - e quem esta no meio do defeito precisa saber quando pode limpar o cache
+     * sem perder nada. A barra nunca volta: cada etapa so a empurra para frente.
+     *
+     *   0-50%   a fotografia: um comando so no Shizuku, sem como medir por dentro, entao avanca
+     *           por tempo e para em 50% ate ela acabar
+     *   50-65%  guardando e enviando a fotografia
+     *   65-100% enviando a captura - aqui o progresso e real, bytes enviados sobre o total
+     */
+    private fun acompanharTravou() {
+        val agora = System.currentTimeMillis()
+        when (etapaTravou) {
+            1 -> {
+                if (CaptureService.fotoConcluidaEm > marcoFoto && !CaptureService.fotoAtiva) {
+                    resultadoFoto = CaptureService.fotoFalha
+                    fotoTerminouEm = agora
+                    etapaTravou = 2
+                    avancar(65)
+                    andamentoFoto?.text = "enviando a captura..."
+                    return
+                }
+                val passo = CaptureService.fotoPasso
+                when {
+                    passo.startsWith("enviando a captura") -> avancar(62)
+                    passo.startsWith("guardando") -> avancar(55)
+                    else -> avancar(3 + ((agora - marcoFoto) * 47 / 10_000L).toInt().coerceAtMost(47))
+                }
+                if (passo.isNotEmpty()) andamentoFoto?.text = passo
+                // Sem teto, um servico parado deixaria a barra girando para sempre.
+                if (agora - marcoFoto > 60_000L) {
+                    terminarTravou("Não consegui registrar", "O pedido não chegou a ser atendido. Tente de novo.")
+                }
+            }
+            2 -> {
+                if (CaptureService.envioAtivo) {
+                    val alvo = CaptureService.envioAlvo
+                    if (alvo > 0) {
+                        avancar(65 + (CaptureService.envioFeito.toLong() * 35 / alvo).toInt())
+                        andamentoFoto?.text = "enviando a captura: " + emKb(CaptureService.envioFeito) +
+                            " de " + emKb(alvo)
+                    }
+                    return
+                }
+                // O envio foi pedido junto com a fotografia, entao pode ter terminado antes mesmo de
+                // esta etapa comecar: conta qualquer envio concluido depois do toque.
+                if (CaptureService.envioConcluidoEm > marcoFoto) {
+                    avancar(100)
+                    val falhaEnvio = CaptureService.envioFalha
+                    when {
+                        falhaEnvio.isNotEmpty() -> terminarTravou(
+                            "Não consegui enviar a captura",
+                            falhaEnvio + "\n\nToque em \"O Impulse travou\" de novo, ou em Enviar captura."
+                        )
+                        resultadoFoto.isEmpty() -> terminarTravou(
+                            "Captura enviada",
+                            "O estado do Impulse foi registrado e a captura já foi enviada. Agora pode " +
+                                "limpar o cache do Impulse para voltar a funcionar."
+                        )
+                        else -> terminarTravou(
+                            "Captura enviada, sem a fotografia",
+                            "Não consegui tirar a fotografia do Impulse: " + resultadoFoto + ". A captura " +
+                                "já foi enviada mesmo assim. Agora pode limpar o cache do Impulse."
+                        )
+                    }
+                    return
+                }
+                if (agora - fotoTerminouEm > 90_000L) {
+                    terminarTravou(
+                        "O envio está demorando",
+                        "A captura continua sendo enviada em segundo plano. Espere mais um pouco antes " +
+                            "de limpar o cache do Impulse."
+                    )
+                }
+            }
+        }
+    }
+
+    /** A barra so anda para frente: voltar faria parecer que o trabalho recomecou. */
+    private fun avancar(valor: Int) {
+        val alvo = valor.coerceIn(0, 100)
+        if (alvo <= progressoTravou) return
+        progressoTravou = alvo
+        barraFoto?.progress = alvo
+    }
+
+    private fun terminarTravou(titulo: String, texto: String) {
+        etapaTravou = 0
+        handler.removeCallbacks(tiqueTravou)
+        botaoTravou?.isEnabled = true
+        barraFoto?.visibility = android.view.View.GONE
+        andamentoFoto?.visibility = android.view.View.GONE
+        avisar(titulo, texto)
     }
 
     private fun mostrarBotaoDeAtualizacao() {

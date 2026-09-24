@@ -398,13 +398,13 @@ class CaptureService : Service() {
          * repositorio que so guarda captura. Como o aplicativo e publico, parta do principio de que
          * ela pode ser extraida; o estrago possivel e escrever arquivo la, e revogar e um clique.
          */
-        fun subirParaGitHub(arquivo: File, etiqueta: String): String? {
+        fun subirParaGitHub(arquivo: File, etiqueta: String, extensao: String = "ndjson"): String? {
             val token = BuildConfig.GITHUB_TOKEN
             if (token.isEmpty()) return "sem credencial no aplicativo"
             var conn: HttpURLConnection? = null
             return try {
                 val quando = SimpleDateFormat("yyyy-MM-dd'T'HH-mm-ss", Locale.US).format(Date())
-                val caminho = "capturas/" + etiqueta + "/" + quando + ".ndjson"
+                val caminho = "capturas/" + etiqueta + "/" + quando + "." + extensao
                 val conteudo = android.util.Base64.encodeToString(
                     arquivo.readBytes(), android.util.Base64.NO_WRAP
                 )
@@ -501,6 +501,21 @@ class CaptureService : Service() {
             pedidoDeReenvio = true
         }
 
+        // Fotografia das threads do Impulse, pedida pelo botao "O Impulse travou".
+        @Volatile private var pedidoDeFoto = false
+        @Volatile var fotoAtiva = false
+            private set
+        @Volatile var fotoPasso = ""
+            private set
+        @Volatile var fotoFalha = ""
+            private set
+        @Volatile var fotoConcluidaEm = 0L
+            private set
+
+        fun pedirFotoDoImpulse() {
+            pedidoDeFoto = true
+        }
+
         private fun consumirPedidoDeReenvio(): Boolean {
             val havia = pedidoDeReenvio
             pedidoDeReenvio = false
@@ -559,6 +574,7 @@ class CaptureService : Service() {
         Thread({ atenderReenvios() }, "reenvio").apply { isDaemon = true }.start()
         Thread({ vigiarConexao() }, "vigia").apply { isDaemon = true }.start()
         Thread({ sondarImpulse() }, "sonda").apply { isDaemon = true }.start()
+        Thread({ atenderFotos() }, "foto").apply { isDaemon = true }.start()
         // O log do Impulse e do Shizuku, lido daqui: a captura conta o que houve DENTRO do Impulse
         // sem depender da versao dele nem de mexer nela. Ver ColetorDeLog.
         ColetorDeLog.iniciar(this, { arquivo.length() }) { tipo, dados ->
@@ -743,6 +759,129 @@ class CaptureService : Service() {
                 Log.w(TAG, "vigia falhou", e)
             }
         }
+    }
+
+    /**
+     * Fotografa as threads do Impulse no instante em que alguem diz que ele travou.
+     *
+     * Existe por causa do carro 931924, em 24/09: depois de 15 minutos dirigindo pararam a projecao
+     * do cluster, os botoes do volante, o ar pelo Impulse e ate os botoes fisicos - e a captura
+     * mostrou o Shizuku VIVO o tempo todo, com o nosso processo atuando normalmente. O defeito
+     * estava dentro do Impulse, e o padrao (varias funcoes sem relacao parando juntas, o vidro, que
+     * roda por outro caminho, funcionando) e o de uma thread presa. A fotografia mostra cada thread e
+     * a linha exata em que ela espera; deixa de ser palpite.
+     *
+     * O Android tira a fotografia sem matar o processo (sinal 3, o mesmo mecanismo do "nao
+     * responde"), e ela cai em /data/anr/trace_NN. Tudo acontece num comando so pelo Shizuku - achar
+     * o Impulse, pedir, esperar o arquivo novo terminar de ser escrito e devolver o conteudo - porque
+     * cada comando e um processo novo no Shizuku, e processo novo e o que vaza memoria nele.
+     *
+     * Precisa ser tocado ANTES de limpar o cache: limpar reinicia o Impulse e leva a prova junto.
+     */
+    private fun atenderFotos() {
+        while (enviando) {
+            try {
+                if (!pedidoDeFoto) {
+                    Thread.sleep(500)
+                    continue
+                }
+                pedidoDeFoto = false
+                fotoFalha = ""
+                fotoAtiva = true
+                fotoPasso = "pedindo a fotografia das threads do Impulse..."
+                fotoFalha = try {
+                    fotografarImpulse() ?: ""
+                } catch (e: InterruptedException) {
+                    throw e
+                } catch (e: Throwable) {
+                    "falhou: " + (e.message ?: e.javaClass.simpleName)
+                }
+                // A captura vai SEMPRE, com ou sem fotografia. Quem tocou esta no meio do defeito;
+                // se a fotografia falhar, ficar so com uma mensagem de erro seria perder tambem o
+                // que o botao Enviar ja entregava. Despejo sincrono antes de pedir o envio, senao o
+                // envio travaria o tamanho do arquivo antes de os ultimos minutos do log chegarem.
+                fotoPasso = "enviando a captura junto..."
+                try {
+                    ColetorDeLog.despejarAgora("Impulse travado, marcado pelo botao")
+                } catch (e: Throwable) {
+                    Log.w(TAG, "despejo do botao falhou", e)
+                }
+                pedirReenvioCompleto()
+                fotoAtiva = false
+                fotoConcluidaEm = System.currentTimeMillis()
+            } catch (e: InterruptedException) {
+                return
+            } catch (e: Throwable) {
+                fotoFalha = "falhou: " + (e.message ?: e.javaClass.simpleName)
+                fotoAtiva = false
+                fotoConcluidaEm = System.currentTimeMillis()
+            }
+        }
+    }
+
+    /** Devolve null quando deu certo, ou o motivo da falha em palavras de gente. */
+    private fun fotografarImpulse(): String? {
+        // '§' no lugar de cifrao, trocado no fim: o script e shell, e escrever ${'$'} a cada
+        // variavel o deixaria ilegivel.
+        val script = """
+            P=§(pidof br.com.redesurftank.havalshisuku | cut -d' ' -f1)
+            if [ -z "§P" ]; then echo "ERRO sem_impulse"; exit 0; fi
+            A=§(ls -t /data/anr 2>/dev/null | head -1)
+            kill -3 §P 2>/dev/null || { echo "ERRO sem_permissao"; exit 0; }
+            i=0; N=""
+            while [ §i -lt 15 ]; do
+              sleep 1
+              N=§(ls -t /data/anr 2>/dev/null | head -1)
+              if [ -n "§N" ] && [ "§N" != "§A" ]; then break; fi
+              N=""; i=§((i+1))
+            done
+            if [ -z "§N" ]; then echo "ERRO sem_arquivo"; exit 0; fi
+            s1=-1; j=0
+            while [ §j -lt 8 ]; do
+              s2=§(stat -c %s /data/anr/§N 2>/dev/null)
+              if [ "§s2" = "§s1" ]; then break; fi
+              s1=§s2; sleep 1; j=§((j+1))
+            done
+            echo "OK pid=§P arquivo=§N"
+            cat /data/anr/§N
+        """.trimIndent().replace('§', '$')
+
+        val saida = rodarComandoShizuku(arrayOf("sh", "-c", script))
+        val primeira = saida.lineSequence().firstOrNull()?.trim().orEmpty()
+        if (!primeira.startsWith("OK")) {
+            val motivo = when {
+                saida.isBlank() -> "o Shizuku nao respondeu"
+                "sem_impulse" in primeira -> "o Impulse nao esta rodando"
+                "sem_permissao" in primeira -> "o Shizuku desta central nao tem permissao para isso"
+                "sem_arquivo" in primeira -> "o Android nao gravou a fotografia a tempo"
+                else -> primeira.take(120)
+            }
+            anotar("threads_falhou", mapOf("motivo" to motivo))
+            return motivo
+        }
+
+        fotoPasso = "guardando e enviando a fotografia..."
+        val cabecalho = primeira
+        // O conteudo e do Impulse de outra pessoa: o mesmo cuidado do log - chassi inteiro e
+        // tokens nao saem daqui.
+        val texto = ColetorDeLog.limpar(saida.substringAfter('\n', ""))
+        val threads = texto.lineSequence().count { it.startsWith("\"") }
+        val quando = SimpleDateFormat("yyyy-MM-dd'T'HH-mm-ss", Locale.US).format(Date())
+        val local = File(filesDir, "threads-" + quando + ".txt")
+        local.writeText(texto)
+
+        val enviado = subirParaGitHub(local, etiqueta + "/threads", "txt")
+        anotar(
+            "threads_capturadas",
+            mapOf(
+                "origem" to cabecalho,
+                "threads" to threads.toString(),
+                "bytes" to local.length().toString(),
+                "enviado" to (enviado ?: "ok")
+            )
+        )
+
+        return if (enviado == null) null else "a fotografia foi tirada, mas nao consegui enviar: " + enviado
     }
 
     /**

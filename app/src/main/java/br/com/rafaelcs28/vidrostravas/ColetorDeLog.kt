@@ -174,7 +174,11 @@ object ColetorDeLog {
      * envio travasse o tamanho do arquivo antes do despejo, mandaria tudo menos isso.
      */
     fun despejarAgora(motivo: String): Int {
-        val trecho = retirarDaCaixa(System.currentTimeMillis())
+        val agora = System.currentTimeMillis()
+        // Tambem abre a janela de gravar tudo: depois de um momento que alguem marcou, costuma vir
+        // a recuperacao (limpar o cache, reiniciar), e ela precisa ficar registrada inteira.
+        gravarTudoAte = agora + JANELA_DEPOIS_MS
+        val trecho = retirarDaCaixa(agora)
         emitir("log_momento", mapOf("motivo" to motivo, "linhas_antes" to trecho.size.toString()))
         for (d in trecho) emitir("log", d)
         return trecho.size
@@ -489,7 +493,7 @@ object ColetorDeLog {
         emitir("log", dados)
     }
 
-    private fun limpar(s: String): String {
+    internal fun limpar(s: String): String {
         val semChassi = CHASSI.replace(s) { "[chassi ..." + it.value.takeLast(6) + "]" }
         return TOKEN.replace(semChassi) { m ->
             if (m.groupValues[1].isNotEmpty()) m.groupValues[1] + "[oculto]" else "[token oculto]"
