@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<style>
+  :root{
+    --fundo:#0b0e12; --cartao:#141a21; --borda:#232c36;
+    --texto:#e8eef4; --suave:#93a3b1; --verde:#4ade80; --verde-escuro:#05140a;
+    --ambar:#fbbf24; --ambar-fundo:#2a2110;
+    --laranja:#fb923c; --laranja-fundo:#241408;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:1920px;background:var(--fundo)}
+  body{font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;color:var(--texto);padding:52px 56px 40px}
+  p,li{text-wrap:pretty}
+  b{font-weight:700;color:#fff}
+
+  .topo{margin-bottom:32px}
+  .selo{display:inline-block;font-size:22px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+        color:var(--verde);border:2px solid var(--verde);border-radius:999px;padding:6px 18px;margin-bottom:16px}
+  h1{font-size:66px;line-height:1.02;font-weight:800;letter-spacing:-.02em}
+  .sub{font-size:28px;line-height:1.4;color:var(--suave);margin-top:14px}
+
+  .grade{display:grid;grid-template-columns:1fr 1.18fr 1fr;gap:28px;align-items:stretch}
+  .col{display:flex;flex-direction:column;gap:24px}
+  .col > :last-child{flex:1}
+  .cartao{background:var(--cartao);border:2px solid var(--borda);border-radius:24px;padding:30px 32px}
+  h2{font-size:22px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--suave);margin-bottom:22px}
+
+  ol{list-style:none;counter-reset:passo}
+  ol li{counter-increment:passo;position:relative;padding-left:64px;font-size:28px;line-height:1.36;margin-bottom:20px}
+  ol li:last-child{margin-bottom:0}
+  ol li::before{content:counter(passo);position:absolute;left:0;top:-1px;width:44px;height:44px;border-radius:50%;
+       background:var(--verde);color:var(--verde-escuro);font-weight:800;font-size:25px;display:flex;align-items:center;justify-content:center}
+  .link{display:block;margin:12px 0 2px;font-family:"SF Mono",Menlo,monospace;font-size:28px;font-weight:700;
+        color:var(--verde);background:#0a1a10;border:2px dashed var(--verde);border-radius:12px;padding:12px 16px}
+  .app{display:inline-block;margin-top:10px;font-family:"SF Mono",Menlo,monospace;font-size:24px;color:var(--verde);
+       background:#0b0e12;border:2px solid var(--borda);border-radius:10px;padding:8px 14px}
+
+  .principal{background:var(--laranja-fundo);border:3px solid var(--laranja);border-radius:24px;padding:30px 34px}
+  .principal h2{color:#fdba74}
+  .quando{font-size:28px;line-height:1.4;margin-bottom:22px}
+  .principal ol li::before{background:var(--laranja);color:#1a0d05}
+  .botao-laranja{display:inline-block;margin-top:10px;background:var(--laranja);color:#1a0d05;font-weight:800;
+       font-size:23px;border-radius:10px;padding:11px 16px;white-space:nowrap}
+  .porque{margin-top:22px;padding-top:20px;border-top:2px solid #4a2a12;font-size:25px;line-height:1.4;color:#f2c9a4}
+  .porque b{color:#fff}
+
+  .alerta{background:var(--ambar-fundo);border:2px solid var(--ambar);border-radius:22px;padding:24px 28px;
+          display:flex;gap:20px;align-items:flex-start}
+  .alerta .ic{flex:none;width:46px;height:46px;border-radius:50%;background:var(--ambar);color:#231a05;font-size:32px;font-weight:900;
+              display:flex;align-items:center;justify-content:center}
+  .alerta p{font-size:26px;line-height:1.38}
+  .alerta b{color:var(--ambar)}
+  p.txt{font-size:26px;line-height:1.4}
+  ul{list-style:none}
+  ul li{position:relative;padding-left:34px;font-size:25px;line-height:1.38;margin-bottom:14px}
+  ul li:last-child{margin-bottom:0}
+  ul li::before{content:"";position:absolute;left:6px;top:14px;width:12px;height:12px;border-radius:50%;background:var(--suave)}
+
+  .rodape{margin-top:30px;font-size:23px;color:var(--suave);text-align:center}
+</style></head>
+<body>
+  <div class="topo">
+    <span class="selo">Teste do Impulse</span>
+    <h1>O Impulse trava ou os vidros não fecham?</h1>
+    <p class="sub">Instale o app de diagnóstico e ajude a descobrir o porquê. Ele só observa — não muda nada no carro nem no Impulse.</p>
+  </div>
+
+  <div class="grade">
+    <div class="col">
+      <div class="cartao">
+        <h2>Como instalar</h2>
+        <ol>
+          <li>No Impulse, abra o menu <b>Instalar Apps</b></li>
+          <li>No campo <b>URL do APK</b>, digite exatamente:
+            <span class="link">https://tinyurl.com/impulsevt</span></li>
+          <li>Toque em <b>Instalar via URL</b></li>
+          <li>Abra o app <b>Impulse Vidros e Travas</b>. Se pedir, autorize o <b>Shizuku</b></li>
+          <li>Confira se aparece em verde:<br><span class="app">Carro 123456 - capturando</span></li>
+        </ol>
+      </div>
+      <div class="cartao">
+        <h2>Quer testar o vidro na hora?</h2>
+        <p class="txt">Com você ao lado do carro: abra um vidro, desligue e tranque. Se ele não subir, use o botão laranja.</p>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="principal">
+        <h2>Quando der problema</h2>
+        <p class="quando">O Impulse travou — projeção, volante, ar ou botões pararam — <b>ou</b> o vidro não fechou:</p>
+        <ol>
+          <li><b>Antes de limpar o cache</b>, abra o app e toque no botão laranja:<br><span class="botao-laranja">O Impulse travou — capturar agora</span></li>
+          <li>Espere a barra chegar ao fim e aparecer <b>“Captura&nbsp;enviada”</b></li>
+          <li>Me mande o <b>número do carro</b> — é o que aparece em verde no app</li>
+          <li>Pronto. Agora pode limpar o cache do Impulse para ele voltar a funcionar</li>
+        </ol>
+        <p class="porque"><b>Por que antes?</b> Limpar o cache reinicia o Impulse e apaga o que estava travado. O botão registra esse estado enquanto ele ainda existe.</p>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="alerta">
+        <div class="ic">!</div>
+        <p><b>No app de diagnóstico, não toque em “Limpar”.</b> Ele guarda tudo sozinho, mesmo desligando o carro.</p>
+      </div>
+      <div class="cartao">
+        <h2>Bom saber</h2>
+        <ul>
+          <li>Deixe o app instalado e use o carro normalmente. Ele liga sozinho com o carro</li>
+          <li>Se aparecer um botão verde <b>Atualizar</b>, toque nele</li>
+          <li>Do chassi, só sai o final (6&nbsp;caracteres). A captura vai de forma privada só para quem está investigando</li>
+          <li>Pode desinstalar quando o teste terminar</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <p class="rodape">Use a versão 1.27 ou mais nova — o número aparece no topo do app, ao lado do nome</p>
+</body></html>

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<style>
+  :root{
+    --fundo:#0b0e12; --cartao:#141a21; --borda:#232c36;
+    --texto:#e8eef4; --suave:#93a3b1; --verde:#4ade80; --verde-escuro:#05140a;
+    --ambar:#fbbf24; --ambar-fundo:#2a2110;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:1080px;background:var(--fundo)}
+  p,li{text-wrap:pretty}
+  body{font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;color:var(--texto);padding:64px 60px 56px}
+  .selo{display:inline-block;font-size:26px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+        color:var(--verde);border:2px solid var(--verde);border-radius:999px;padding:8px 22px;margin-bottom:26px}
+  h1{font-size:74px;line-height:1.02;font-weight:800;letter-spacing:-.02em}
+  .sub{font-size:33px;line-height:1.35;color:var(--suave);margin-top:18px}
+  .cartao{background:var(--cartao);border:2px solid var(--borda);border-radius:28px;padding:38px 40px;margin-top:34px}
+  h2{font-size:30px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--suave);margin-bottom:26px}
+  p.txt{font-size:33px;line-height:1.4}
+  ol{list-style:none;counter-reset:passo}
+  ol li{counter-increment:passo;position:relative;padding-left:82px;font-size:34px;line-height:1.38;margin-bottom:26px}
+  ol li:last-child{margin-bottom:0}
+  ol li::before{content:counter(passo);position:absolute;left:0;top:-2px;width:56px;height:56px;border-radius:50%;
+       background:var(--verde);color:var(--verde-escuro);font-weight:800;font-size:31px;display:flex;align-items:center;justify-content:center}
+  b{font-weight:700;color:#fff}
+  .link{display:block;margin:16px 0 4px;font-family:"SF Mono",Menlo,monospace;font-size:39px;font-weight:700;
+        color:var(--verde);background:#0a1a10;border:2px dashed var(--verde);border-radius:16px;padding:18px 22px;letter-spacing:-.01em}
+  .app{display:inline-block;margin-top:12px;font-family:"SF Mono",Menlo,monospace;font-size:28px;color:var(--verde);
+       background:#0b0e12;border:2px solid var(--borda);border-radius:12px;padding:10px 18px}
+  ul{list-style:none}
+  ul li{position:relative;padding-left:46px;font-size:33px;line-height:1.4;margin-bottom:20px}
+  ul li:last-child{margin-bottom:0}
+  ul li::before{content:"";position:absolute;left:8px;top:18px;width:14px;height:14px;border-radius:50%;background:var(--suave)}
+  .alerta{background:var(--ambar-fundo);border:2px solid var(--ambar);border-radius:22px;padding:28px 34px;margin-top:34px;
+          display:flex;gap:26px;align-items:flex-start}
+  .alerta .ic{flex:none;width:58px;height:58px;border-radius:50%;background:var(--ambar);color:#231a05;font-size:40px;font-weight:900;
+              display:flex;align-items:center;justify-content:center}
+  .alerta p{font-size:33px;line-height:1.38}
+  .alerta b{color:var(--ambar)}
+  .dica{margin-top:26px;padding-top:24px;border-top:2px solid var(--borda);font-size:30px;line-height:1.4;color:var(--suave)}
+  .dica b{color:var(--texto)}
+  .principal{background:#241408;border:3px solid #fb923c;border-radius:28px;padding:38px 40px;margin-top:34px}
+  .principal h2{color:#fdba74}
+  .principal .quando{font-size:33px;line-height:1.4;margin-bottom:28px}
+  .principal ol li::before{background:#fb923c;color:#1a0d05}
+  .botao-laranja{display:inline-block;margin-top:12px;background:#fb923c;color:#1a0d05;font-weight:800;
+       font-size:29px;border-radius:12px;padding:14px 22px}
+  .porque{margin-top:26px;padding-top:24px;border-top:2px solid #4a2a12;font-size:30px;line-height:1.4;color:#f2c9a4}
+  .porque b{color:#fff}
+  .rodape{text-wrap:balance;margin-top:34px;font-size:27px;line-height:1.45;color:var(--suave);text-align:center}
+</style></head>
+<body>
+  <span class="selo">Teste do Impulse</span>
+  <h1>O Impulse trava ou os vidros não fecham?</h1>
+  <p class="sub">Instale o app de diagnóstico e ajude a descobrir o porquê. Ele só observa — não muda nada no carro nem no Impulse.</p>
+
+  <div class="cartao">
+    <h2>Como instalar</h2>
+    <ol>
+      <li>No Impulse, abra o menu <b>Instalar Apps</b></li>
+      <li>No campo <b>URL do APK</b>, digite exatamente:
+        <span class="link">https://tinyurl.com/impulsevt</span></li>
+      <li>Toque em <b>Instalar via URL</b></li>
+      <li>Abra o app <b>Impulse Vidros e Travas</b>. Se pedir, autorize o <b>Shizuku</b></li>
+      <li>Confira se aparece em verde:<br><span class="app">Carro 123456 - capturando</span></li>
+    </ol>
+  </div>
+
+  <div class="alerta">
+    <div class="ic">!</div>
+    <p><b>No app de diagnóstico, não toque em “Limpar”.</b> Ele guarda tudo sozinho, mesmo desligando o carro. Apagar pode levar junto justamente o momento do problema.</p>
+  </div>
+
+  <div class="principal">
+    <h2>Quando der problema</h2>
+    <p class="quando">O Impulse travou — projeção, volante, ar ou botões pararam — <b>ou</b> o vidro não fechou:</p>
+    <ol>
+      <li><b>Antes de limpar o cache</b>, abra o app e toque no botão laranja:<br><span class="botao-laranja">O Impulse travou — capturar agora</span></li>
+      <li>Espere a barra chegar ao fim e aparecer <b>“Captura&nbsp;enviada”</b></li>
+      <li>Me mande o <b>número do carro</b> — é o que aparece em verde no app</li>
+      <li>Pronto. Agora pode limpar o cache do Impulse para ele voltar a funcionar</li>
+    </ol>
+    <p class="porque"><b>Por que antes?</b> Limpar o cache reinicia o Impulse e apaga o que estava travado. O botão registra esse estado enquanto ele ainda existe.</p>
+  </div>
+
+  <div class="cartao">
+    <h2>Quer testar o vidro na hora?</h2>
+    <p class="txt">Com você ao lado do carro: abra um vidro, desligue e tranque. Se ele não subir, use o botão laranja.</p>
+  </div>
+
+  <div class="cartao">
+    <h2>Bom saber</h2>
+    <ul>
+      <li>Deixe o app instalado e use o carro normalmente. Ele liga sozinho com o carro</li>
+      <li>Se aparecer um botão verde <b>Atualizar</b>, toque nele</li>
+      <li>Do chassi, só sai o final (6 caracteres). A captura vai de forma privada só para quem está investigando</li>
+      <li>Pode desinstalar quando o teste terminar</li>
+    </ul>
+  </div>
+
+  <p class="rodape">Use a versão 1.27 ou mais nova<br>(o número aparece no topo do app, ao lado do nome)</p>
+</body></html>
