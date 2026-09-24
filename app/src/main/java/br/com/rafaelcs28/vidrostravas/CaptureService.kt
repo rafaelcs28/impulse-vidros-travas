@@ -307,6 +307,10 @@ class CaptureService : Service() {
                     when {
                         !rikka.shizuku.Shizuku.pingBinder() -> "nao esta rodando"
                         rikka.shizuku.Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> "autorizado"
+                        // "Recusar e nao perguntar de novo": o Shizuku nao mostra mais a janela, e so
+                        // da para autorizar pelo proprio app dele. Precisa aparecer distinto daqui,
+                        // porque o que se pede a pessoa e outra coisa.
+                        rikka.shizuku.Shizuku.shouldShowRequestPermissionRationale() -> "recusado"
                         else -> "esperando autorizacao"
                     }
                 } catch (e: Exception) {
@@ -323,6 +327,28 @@ class CaptureService : Service() {
                     "{\"carro\":\"" + etiquetaDe(ctx) + "\",\"t\":\"" + hora + "\",\"ms\":" + agora +
                         ",\"tipo\":\"abriu\",\"app\":\"" + versao + "\",\"shizuku\":\"" + shizuku + "\"}"
                 )
+        }
+
+        /**
+         * Conta o que a pessoa respondeu na janela do Shizuku.
+         *
+         * Sem isto, daqui so se via "esperando autorizacao" repetido a cada abertura - e nao dava
+         * para saber se a janela nem apareceu, se foi fechada, ou se a pessoa recusou.
+         */
+        fun avisarAutorizacao(ctx: Context, concedida: Boolean) {
+            Thread {
+                try {
+                    val agora = System.currentTimeMillis()
+                    val hora = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(agora))
+                    enviar(
+                        "{\"carro\":\"" + etiquetaDe(ctx) + "\",\"t\":\"" + hora + "\",\"ms\":" + agora +
+                            ",\"tipo\":\"autorizacao\",\"resultado\":\"" +
+                            (if (concedida) "concedida" else "recusada") + "\"}"
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "aviso de autorizacao falhou", e)
+                }
+            }.start()
         }
 
         @Volatile
@@ -621,6 +647,14 @@ class CaptureService : Service() {
                 envioRecusas = 0
                 envioFalha = ""
                 envioConcluidoEm = 0L
+                // A caixa-preta do log vai para o arquivo ANTES de travar o tamanho do envio: quem
+                // toca em Enviar acabou de ver o defeito, e os ultimos minutos do Impulse sao o que
+                // mais interessa. Travado antes, o envio mandaria tudo menos isso.
+                try {
+                    ColetorDeLog.despejarAgora("envio pedido na tela")
+                } catch (e: Throwable) {
+                    Log.w(TAG, "despejo antes do envio falhou", e)
+                }
                 envioAlvo = if (arquivo.exists()) arquivo.length().toInt() else 0
                 envioAtivo = true
                 if (envioAlvo == 0) {

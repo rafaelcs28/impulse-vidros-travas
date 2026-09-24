@@ -37,12 +37,26 @@ class MainActivity : Activity() {
     private var botaoAtualizar: Button? = null
     private var barra: ProgressBar? = null
     private var andamento: TextView? = null
+
+    /** Painel proprio da autorizacao do Shizuku - fora da linha de status, que e reescrita. */
+    private var painelAutorizacao: LinearLayout? = null
+    private var tituloAutorizacao: TextView? = null
+    private var textoAutorizacao: TextView? = null
+    private var botaoAutorizacao: Button? = null
+    private var situacaoMostrada = ""
     private var atualizando = false
 
     private val aoResponder = Shizuku.OnRequestPermissionResultListener { pedido, resultado ->
         if (pedido == PEDIDO_SHIZUKU) {
-            if (resultado == android.content.pm.PackageManager.PERMISSION_GRANTED) iniciar()
-            else status.text = "Autorizacao do Shizuku negada. Abra o Shizuku, autorize este app e volte."
+            val concedida = resultado == android.content.pm.PackageManager.PERMISSION_GRANTED
+            CaptureService.avisarAutorizacao(this, concedida)
+            // Na thread da tela, sem depender de em qual thread o Shizuku entrega o resultado:
+            // mexer em view fora dela derruba o aplicativo.
+            runOnUiThread {
+                if (concedida) iniciar()
+                situacaoMostrada = ""
+                revisarAutorizacao()
+            }
         }
     }
 
@@ -98,6 +112,36 @@ class MainActivity : Activity() {
             setPadding(0, 4, 0, 8)
         }
         raiz.addView(andamento)
+
+        // A autorizacao ganhou painel proprio pelo mesmo motivo do progresso da atualizacao: a
+        // linha de status e reescrita a cada segundo com o andamento da captura. O "Pedindo
+        // autorizacao ao Shizuku" que ficava ali sumia em um segundo, e quem abria o app via so
+        // "Carro ... - 0 eventos", sem saber que faltava autorizar. Um carro ficou assim por um
+        // dia inteiro, abrindo o app sete vezes.
+        tituloAutorizacao = TextView(this).apply {
+            textSize = 20f
+            setTextColor(Color.parseColor("#fbbf24"))
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        textoAutorizacao = TextView(this).apply {
+            textSize = 16f
+            setTextColor(Color.parseColor("#f5e9c8"))
+            setPadding(0, 10, 0, 18)
+        }
+        botaoAutorizacao = Button(this).apply {
+            setBackgroundColor(Color.parseColor("#fbbf24"))
+            setTextColor(Color.parseColor("#231a05"))
+        }
+        painelAutorizacao = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(28, 24, 28, 24)
+            setBackgroundColor(Color.parseColor("#2a2110"))
+            visibility = android.view.View.GONE
+            addView(tituloAutorizacao)
+            addView(textoAutorizacao)
+            addView(botaoAutorizacao)
+        }
+        raiz.addView(painelAutorizacao)
 
         status = TextView(this).apply {
             textSize = 16f
@@ -197,6 +241,7 @@ class MainActivity : Activity() {
         }
         registro.text = CaptureService.ultimos.joinToString("\n")
         conferirEnvio()
+        revisarAutorizacao()
         handler.postDelayed({ atualizar() }, 1000)
     }
 
@@ -276,6 +321,83 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Cancelar", null)
             .show()
+    }
+
+    /**
+     * Em que pe esta a autorizacao do Shizuku. Revisada a cada segundo, para o painel sumir sozinho
+     * assim que a pessoa autorizar - inclusive quando autoriza pelo app do Shizuku, fora daqui.
+     */
+    private fun situacaoDoShizuku(): String = try {
+        when {
+            !Shizuku.pingBinder() -> "nao_rodando"
+            Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED -> "autorizado"
+            // Recusou com "nao perguntar de novo": a janela nao aparece mais, e tocar em Autorizar
+            // nao faria nada visivel. O caminho passa a ser o app do Shizuku.
+            Shizuku.shouldShowRequestPermissionRationale() -> "recusado"
+            else -> "falta"
+        }
+    } catch (e: Exception) {
+        "nao_rodando"
+    }
+
+    private fun revisarAutorizacao() {
+        val situacao = situacaoDoShizuku()
+        if (situacao == situacaoMostrada) return
+        situacaoMostrada = situacao
+        val painel = painelAutorizacao ?: return
+        when (situacao) {
+            "autorizado" -> {
+                painel.visibility = android.view.View.GONE
+                iniciar()
+            }
+            "nao_rodando" -> mostrarPainel(
+                "O Shizuku ainda não está rodando",
+                "Ele sobe junto com o Impulse. Toque em Abrir o Impulse, espere alguns segundos e " +
+                    "volte para este app.",
+                "Abrir o Impulse"
+            ) { abrirApp("br.com.redesurftank.havalshisuku", "Impulse") }
+            "recusado" -> mostrarPainel(
+                "A autorização foi recusada",
+                "O Shizuku não vai mais perguntar sozinho. Toque em Abrir o Shizuku, procure " +
+                    "Impulse Vidros e Travas na lista de aplicativos e ative a permissão. Depois " +
+                    "volte para este app.",
+                "Abrir o Shizuku"
+            ) { abrirApp("moe.shizuku.privileged.api", "Shizuku") }
+            else -> mostrarPainel(
+                "Falta autorizar o Shizuku",
+                "Sem essa autorização o app não consegue ler o carro e não captura nada. Toque em " +
+                    "Autorizar: vai abrir uma janela do Shizuku. Nela, escolha a opção de permitir.",
+                "Autorizar"
+            ) {
+                try {
+                    Shizuku.requestPermission(PEDIDO_SHIZUKU)
+                } catch (e: Exception) {
+                    avisar("Não consegui pedir a autorização", e.message ?: e.javaClass.simpleName)
+                }
+            }
+        }
+    }
+
+    private fun mostrarPainel(titulo: String, texto: String, rotulo: String, acao: () -> Unit) {
+        tituloAutorizacao?.text = titulo
+        textoAutorizacao?.text = texto
+        botaoAutorizacao?.text = rotulo
+        botaoAutorizacao?.setOnClickListener { acao() }
+        painelAutorizacao?.visibility = android.view.View.VISIBLE
+    }
+
+    private fun abrirApp(pacote: String, nome: String) {
+        val intent = packageManager.getLaunchIntentForPackage(pacote)
+        if (intent == null) {
+            avisar("Não encontrei o " + nome, "O " + nome + " não parece estar instalado nesta central.")
+            return
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            avisar("Não consegui abrir o " + nome, e.message ?: e.javaClass.simpleName)
+        }
     }
 
     private fun mostrarBotaoDeAtualizacao() {

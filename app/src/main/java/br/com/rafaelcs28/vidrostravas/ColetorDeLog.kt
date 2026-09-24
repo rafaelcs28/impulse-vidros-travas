@@ -99,6 +99,17 @@ object ColetorDeLog {
     @Volatile private var gravarTudoAte = 0L
     @Volatile private var processoAtual: moe.shizuku.server.IRemoteProcess? = null
 
+    // Sinal de vida. Sem ele, "funcionando e quieto" e "quebrado" ficam identicos numa captura: a
+    // primeira da 1.24 chegou sem uma linha de log sequer, e nao havia como dizer qual dos dois era.
+    @Volatile private var lidasTotal = 0L
+    @Volatile private var doImpulseTotal = 0L
+    @Volatile private var gravadasTotal = 0L
+    @Volatile private var proximoSinalDeVida = 0L
+    @Volatile private var ultimoErro = ""
+    @Volatile private var ultimoErroEm = 0L
+    private const val PRIMEIRO_SINAL_MS = 20_000L
+    private const val INTERVALO_SINAL_MS = 900_000L
+
     private val pidsImpulse = CopyOnWriteArraySet<String>()
     private val caixaPreta = ArrayDeque<Pair<Long, Map<String, String>>>()
 
@@ -152,18 +163,35 @@ object ColetorDeLog {
      * Um momento que interessa aconteceu: grava os minutos anteriores e tudo que vier a seguir.
      * Pode ser chamado de qualquer thread.
      */
+    /**
+     * Despeja a caixa-preta AGORA, na thread de quem chama, e devolve quantas linhas foram.
+     *
+     * E o que o envio usa. Quem toca em Enviar captura normalmente acabou de ver o defeito, e os
+     * ultimos minutos do Impulse sao exatamente o que interessa - so que eles moram em memoria. Se o
+     * envio travasse o tamanho do arquivo antes do despejo, mandaria tudo menos isso.
+     */
+    fun despejarAgora(motivo: String): Int {
+        val trecho = retirarDaCaixa(System.currentTimeMillis())
+        emitir("log_momento", mapOf("motivo" to motivo, "linhas_antes" to trecho.size.toString()))
+        for (d in trecho) emitir("log", d)
+        return trecho.size
+    }
+
+    private fun retirarDaCaixa(agora: Long): List<Map<String, String>> {
+        synchronized(caixaPreta) {
+            val todos = caixaPreta.filter { agora - it.first <= JANELA_ANTES_MS }.map { it.second }
+            caixaPreta.clear()
+            // Em economia, so o fim do trecho: e o mais proximo do momento, e o que mais explica.
+            return if (emEconomia()) todos.takeLast(DESPEJO_MAX_EM_ECONOMIA) else todos
+        }
+    }
+
     fun marcarMomento(motivo: String) {
         val agora = System.currentTimeMillis()
         val jaGravando = agora < gravarTudoAte
         gravarTudoAte = agora + JANELA_DEPOIS_MS
         if (jaGravando) return
-        val trecho: List<Map<String, String>>
-        synchronized(caixaPreta) {
-            val todos = caixaPreta.filter { agora - it.first <= JANELA_ANTES_MS }.map { it.second }
-            // Em economia, so o fim do trecho: e o mais proximo do momento, e o que mais explica.
-            trecho = if (emEconomia()) todos.takeLast(DESPEJO_MAX_EM_ECONOMIA) else todos
-            caixaPreta.clear()
-        }
+        val trecho = retirarDaCaixa(agora)
         // Em thread propria: quem chama aqui costuma ser o ouvinte do carro, que e a thread que nos
         // entrega os dados. Escrever centenas de linhas nela seguraria a proxima entrega.
         Thread({
@@ -211,6 +239,18 @@ object ColetorDeLog {
             } catch (e: Throwable) {
                 // Throwable: o defeito que se mede chega como OutOfMemoryError vindo do Shizuku.
                 Log.w(TAG, "coletor falhou", e)
+                // Registrado, e nao so no logcat: uma falha aqui antes so aparecia como ausencia de
+                // linhas, igual a um coletor saudavel e quieto. Mesmo erro repetido entra uma vez a
+                // cada dez minutos, para nao virar ele proprio o volume do arquivo.
+                val assinatura = e.javaClass.simpleName + ":" + (e.message ?: "")
+                val agora = System.currentTimeMillis()
+                if (assinatura != ultimoErro || agora - ultimoErroEm > 600_000L) {
+                    ultimoErro = assinatura
+                    ultimoErroEm = agora
+                    emitir("log_erro", mapOf(
+                        "erro" to e.javaClass.simpleName,
+                        "msg" to limpar(e.message ?: "").take(200)))
+                }
                 try { Thread.sleep(ESPERA_REABRIR_MS) } catch (i: InterruptedException) { return }
             }
         }
@@ -230,6 +270,10 @@ object ColetorDeLog {
 
         val processo = servico.newProcess(comando.toTypedArray(), null, null) ?: return 0
         processoAtual = processo
+        emitir("log_fluxo_aberto", mapOf(
+            "filtro" to (if (semColunaDeUid || uidImpulse < 0) "pid" else "uid " + uidImpulse),
+            "inicio" to (if (primeira || ultimoCarimbo.isEmpty()) "historico " + HISTORICO_INICIAL else "retomada " + ultimoCarimbo)))
+        proximoSinalDeVida = System.currentTimeMillis() + PRIMEIRO_SINAL_MS
         var lidas = 0
         var reconhecidas = 0
         val inicio = System.currentTimeMillis()
@@ -259,6 +303,19 @@ object ColetorDeLog {
 
     /** Devolve true se a linha foi reconhecida no formato esperado. */
     private fun tratar(bruta: String): Boolean {
+        lidasTotal++
+        val agoraSinal = System.currentTimeMillis()
+        if (agoraSinal >= proximoSinalDeVida && proximoSinalDeVida > 0L) {
+            proximoSinalDeVida = agoraSinal + INTERVALO_SINAL_MS
+            // doImpulse zerado com muitas linhas lidas e o sintoma de filtro errado: o fluxo corre,
+            // mas nada e reconhecido como do Impulse.
+            emitir("log_ativo", mapOf(
+                "lidas" to lidasTotal.toString(),
+                "do_impulse" to doImpulseTotal.toString(),
+                "gravadas" to gravadasTotal.toString(),
+                "na_caixa" to synchronized(caixaPreta) { caixaPreta.size }.toString(),
+                "pids_impulse" to pidsImpulse.joinToString(",")))
+        }
         val m = LINHA.find(bruta) ?: return false
         val carimbo = m.groupValues[1]
         val uid = m.groupValues[2]
@@ -277,6 +334,7 @@ object ColetorDeLog {
             (PACOTE in msg || "shizuku" in msgMinuscula)
 
         if (!doImpulse && !doShizuku && !doSistema) return true
+        if (doImpulse) doImpulseTotal++
 
         // O Impulse reiniciou: e o momento em que o estado velho some ou nao some.
         if (doImpulse && pid !in pidsImpulse) {
@@ -399,6 +457,7 @@ object ColetorDeLog {
         }
         linhasNoMinuto++
         porTagNoMinuto[tag] = daTag + 1
+        gravadasTotal++
         emitir("log", dados)
     }
 
