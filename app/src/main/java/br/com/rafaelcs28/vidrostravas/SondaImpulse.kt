@@ -45,6 +45,9 @@ object SondaImpulse {
     /** Codigo do IVehicle dentro do IBinderPool da montadora, o mesmo que o Impulse pede. */
     private const val CODIGO_VEHICLE = 6
 
+    /** Piso entre duas sondas de recepcao. Ver `recepcao` para o porque de ser raro. */
+    private const val ESPERA_RECEPCAO_MS = 300_000L
+
     /**
      * Opcoes do Impulse que entram na captura — lista FECHADA, e assim tem que continuar.
      *
@@ -90,6 +93,9 @@ object SondaImpulse {
 
     @Volatile
     private var ultimoTesteDeShellMs = 0L
+
+    @Volatile
+    private var ultimaRecepcaoMs = 0L
 
     /**
      * Uma rodada da sonda. Devolve o que mudou, ou vazio quando esta tudo igual ao anterior.
@@ -219,6 +225,104 @@ object SondaImpulse {
         val assinatura = dados.entries.joinToString(";") { it.key + "=" + it.value }
         if (assinatura == ultimaConfiguracao) return emptyMap()
         ultimaConfiguracao = assinatura
+        return dados
+    }
+
+
+    /**
+     * Mede se o Impulse ainda RECEBE, que e a outra metade do diagnostico.
+     *
+     * Ate a 1.29 esta sonda so media ATUACAO: o embrulho guardado consegue chamar o carro? Em
+     * 24/09, no carro do dono, ela respondeu "guardado=ok(4) novo=ok(4)" trinta e nove segundos
+     * antes de ele marcar o Impulse como travado com os botoes do volante mortos. A fotografia das
+     * threads, de um processo com trinta e um minutos de vida, nao mostrou nenhuma thread presa. As
+     * teclas estavam sendo anunciadas pelo carro: a nossa captura registrou 164 delas, a ultima
+     * rajada vinte segundos antes do botao. Ou seja: o carro fala, nos ouvimos, e o Impulse nao age
+     * — e nao e por falta de binder nem por thread travada. Sobra a hipotese de o registro do
+     * ouvinte DELE ter ficado orfao.
+     *
+     * Que essa hipotese tem pe esta escrito no proprio codigo do Impulse. Para o cluster ele ja
+     * convive com isso: `refreshClusterCallbackIfStale` re-registra quando para de chegar relatorio,
+     * com o comentario "our registration is very likely no longer being dispatched to". Para o
+     * ouvinte de TECLAS nao existe nada parecido — `registerKeyEventListener` acontece uma vez,
+     * quando o servico conecta, e `unregisterKeyEventListener` so no desligamento limpo. Se o
+     * processo morre de outro jeito, o servico da montadora fica com um binder morto na lista, e o
+     * comentario do proprio Impulse diz o que acontece depois: "the next process adds a second
+     * listener rather than replacing the first".
+     *
+     * Esta rodada e de DESCOBERTA, nao de veredito. Nao se sabe ainda se os servicos da montadora
+     * respondem a dumpsys nem em que formato listam quem esta registrado, e adivinhar o formato de
+     * casa seria repetir o erro do coletor de log, que passou por tres defeitos que so o hardware
+     * mostrou. Entao aqui se pergunta pouco e se guarda o que vier: nomes dos servicos, tamanho do
+     * dump, quantas vezes o pacote do Impulse aparece nele e uma amostra das linhas de ouvinte. Com
+     * a primeira captura de um carro de verdade da para escrever a medida certa.
+     *
+     * Rodar raro e so na hora certa. E um comando no Shizuku, e comando no Shizuku e o que vaza e o
+     * mata; alem disso `dumpsys` de servico da montadora e terreno desconhecido. Por isso: no
+     * instante decisivo (tranca/desligamento e o botao "o Impulse travou"), nunca em laco, e no
+     * maximo uma vez a cada cinco minutos.
+     */
+    fun recepcao(motivo: String): Map<String, String> {
+        val agora = System.currentTimeMillis()
+        if (agora - ultimaRecepcaoMs < ESPERA_RECEPCAO_MS) return emptyMap()
+        ultimaRecepcaoMs = agora
+
+        // '§' no lugar de cifrao, trocado no fim, como no script da fotografia das threads.
+        //
+        // `timeout` so entra se existir nesta central: sem ele, um servico da montadora que trave
+        // no dump prenderia a thread que chamou — e quem chama e a mesma que atende o botao. O
+        // `-t 3` do dumpsys cobre o caso normal; o dumpsys pelado so e tentado quando o primeiro
+        // nao devolveu nada, que e o sintoma de a central nao conhecer a opcao.
+        val script = """
+            T="timeout 8"; command -v timeout >/dev/null 2>&1 || T=""
+            P=§(pidof $PACOTE | cut -d' ' -f1)
+            echo "pid=§P"
+            LG=§(ls -t /sdcard/Android/data/$PACOTE/files/cluster-diagnostics/cluster-events-*.log 2>/dev/null | head -1)
+            if [ -n "§LG" ]; then stat -c "log tam=%s mtime=%Y" "§LG" 2>/dev/null; else echo "log ausente"; fi
+            S=§(service list 2>/dev/null | grep -iE 'input|cluster|vehicle|beantechs' | awk '{print §2}' | tr -d ':' | head -8)
+            echo "servicos §(echo §S | tr '\n' ' ')"
+            for n in §S; do
+              D=§(§T dumpsys -t 3 §n 2>/dev/null | head -300)
+              if [ -z "§D" ]; then D=§(§T dumpsys §n 2>/dev/null | head -300); fi
+              if [ -z "§D" ]; then echo "svc §n sem_dump"; continue; fi
+              L=§(echo "§D" | wc -l | tr -d ' ')
+              M=§(echo "§D" | grep -c -i redesurftank)
+              C=§(echo "§D" | grep -c -iE 'listener|callback|client|observer')
+              echo "svc §n linhas=§L impulse=§M ouvintes=§C"
+              echo "§D" | grep -iE 'listener|callback|client|observer' | head -6 | sed "s|^|amostra §n |"
+            done
+        """.trimIndent().replace('§', '$')
+
+        val bruto = try {
+            CaptureService.rodarComandoShizuku(arrayOf("sh", "-c", script))
+        } catch (e: Throwable) {
+            Log.w(TAG, "sonda de recepcao falhou", e)
+            return mapOf("motivo" to motivo, "erro" to e.javaClass.simpleName)
+        }
+        if (bruto.isBlank()) return mapOf("motivo" to motivo, "erro" to "sem_resposta")
+
+        // O dump e de processo de terceiro: passa pela mesma limpeza do log e da fotografia antes
+        // de virar captura.
+        val saida = ColetorDeLog.limpar(bruto)
+
+        val dados = linkedMapOf("motivo" to motivo)
+        val resumo = ArrayList<String>()
+        val amostra = ArrayList<String>()
+        for (linha in saida.lines()) {
+            val texto = linha.trim()
+            when {
+                texto.isEmpty() -> {}
+                texto.startsWith("pid=") -> dados["impulse_pid"] = texto.removePrefix("pid=")
+                texto.startsWith("log ") -> dados["log_persistente"] = texto.removePrefix("log ")
+                texto.startsWith("servicos ") -> dados["servicos"] = texto.removePrefix("servicos ").take(200)
+                texto.startsWith("svc ") -> resumo.add(texto.removePrefix("svc "))
+                texto.startsWith("amostra ") -> amostra.add(texto.removePrefix("amostra "))
+            }
+        }
+        if (resumo.isNotEmpty()) dados["dumps"] = resumo.joinToString(" | ").take(400)
+        // Teto no que e texto livre de outro processo: a amostra existe para ensinar o formato, nao
+        // para ser o dump inteiro dentro da captura.
+        if (amostra.isNotEmpty()) dados["ouvintes"] = amostra.joinToString(" | ").take(1200)
         return dados
     }
 

@@ -865,6 +865,18 @@ class CaptureService : Service() {
                 } catch (e: Throwable) {
                     "falhou: " + (e.message ?: e.javaClass.simpleName)
                 }
+                // Enquanto o defeito esta acontecendo, pergunte tambem quem ainda esta registrado
+                // para receber do carro. A fotografia responde "nenhuma thread esta presa"; esta
+                // sonda e que responde "e chega alguma coisa para elas?". Depois da foto de
+                // proposito: a foto e a que perde valor se o Impulse reiniciar no meio.
+                fotoPasso = "conferindo quem ainda recebe do carro..."
+                try {
+                    val recepcao = SondaImpulse.recepcao("Impulse travado, marcado pelo botao")
+                    if (recepcao.isNotEmpty()) anotar("recepcao", recepcao)
+                } catch (e: Throwable) {
+                    Log.w(TAG, "sonda de recepcao falhou no botao", e)
+                }
+
                 // A captura vai SEMPRE, com ou sem fotografia. Quem tocou esta no meio do defeito;
                 // se a fotografia falhar, ficar so com uma mensagem de erro seria perder tambem o
                 // que o botao Enviar ja entregava. Despejo sincrono antes de pedir o envio, senao o
@@ -994,6 +1006,14 @@ class CaptureService : Service() {
                     val dados = LinkedHashMap(mudou)
                     if (naHora) dados["motivo"] = "trancou/desligou"
                     anotar("atuacao", dados)
+                }
+
+                // So no instante decisivo: e o momento em que o vidro deveria subir, entao e a hora
+                // de saber se o Impulse ainda esta na lista de quem recebe. Fora dele nao se pergunta
+                // — custa um comando no Shizuku, e a propria sonda se segura por cinco minutos.
+                if (naHora) {
+                    val recepcao = SondaImpulse.recepcao("trancou/desligou")
+                    if (recepcao.isNotEmpty()) anotar("recepcao", recepcao)
                 }
 
                 if (agora - ateConfiguracao >= ESPERA_CONFIGURACAO_MS) {
