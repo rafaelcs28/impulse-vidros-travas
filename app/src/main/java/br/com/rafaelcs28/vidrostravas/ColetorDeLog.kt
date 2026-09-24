@@ -3,7 +3,6 @@ package br.com.rafaelcs28.vidrostravas
 import android.content.Context
 import android.util.Log
 import java.io.BufferedReader
-import java.io.FileInputStream
 import java.io.InputStreamReader
 import java.util.ArrayDeque
 import java.util.concurrent.CopyOnWriteArraySet
@@ -103,6 +102,7 @@ object ColetorDeLog {
     // primeira da 1.24 chegou sem uma linha de log sequer, e nao havia como dizer qual dos dois era.
     @Volatile private var lidasTotal = 0L
     @Volatile private var doImpulseTotal = 0L
+    @Volatile private var reconhecidasTotal = 0L
     @Volatile private var gravadasTotal = 0L
     @Volatile private var proximoSinalDeVida = 0L
     @Volatile private var ultimoErro = ""
@@ -127,12 +127,15 @@ object ColetorDeLog {
     /**
      * Linha no formato threadtime, com ou sem a coluna de uid.
      *
-     * Com `-v uid` o Android imprime o uid como `%5d:` - COM dois-pontos - e o pid logo depois em
-     * `%5d`. Quando o pid tem cinco digitos os dois grudam (`10052:12345`), e um padrao que exigisse
-     * espaco entre eles perderia justamente essas linhas. Sem a coluna, a linha comeca direto no pid.
+     * O uid NAO tem formato unico. Nesta central ele sai como coluna numerica simples
+     * (`1000  1852  2033 E`), sem dois-pontos; no codigo do AOSP ele sai como `%5d:`, e com pid de
+     * cinco digitos gruda (`10052:12345`). O padrao aceita os dois: uid seguido OU de dois-pontos
+     * OU de espaco. "Ou de espaco" e obrigatorio, e nao opcional - sem isso uma linha SEM uid, como
+     * `6413  6413 W`, era partida em uid=641 e pid=3. A 1.24 exigia os dois-pontos e nao reconheceu
+     * uma linha sequer do Impulse nesta central. Testado contra linhas reais do carro.
      */
     private val LINHA = Regex(
-        "^(\\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d\\.\\d{3})\\s+(?:([A-Za-z0-9_]+):\\s*)?(\\d+)\\s+(\\d+)\\s+([VDIWEF])\\s+([^:]*?)\\s*: ?(.*)$"
+        "^(\\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d\\.\\d{3})\\s+(?:([A-Za-z0-9_]+)(?::\\s*|\\s+))?(\\d+)\\s+(\\d+)\\s+([VDIWEF])\\s+([^:]*?)\\s*: ?(.*)$"
     )
     private val CHASSI = Regex("\\b[A-HJ-NPR-Z0-9]{17}\\b")
     private val TOKEN = Regex("(Bearer\\s+)[A-Za-z0-9._\\-]+|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}")
@@ -212,32 +215,24 @@ object ColetorDeLog {
         var primeira = true
         var espera = ESPERA_REABRIR_MS
         while (rodando) {
+            var saudavel = false
+            var durou = 0L
+            var lidas = 0
+            var falhou = false
             try {
-                if (semColunaDeUid || uidImpulse < 0) atualizarPids()
+                // A cada abertura, sempre: um comando so, e a abertura e rara com o fluxo saudavel.
+                atualizarPids()
                 val abriuEm = System.currentTimeMillis()
-                val lidas = lerFluxo(primeira)
+                lidas = lerFluxo(primeira)
                 primeira = false
                 if (!rodando) return
-                val durou = System.currentTimeMillis() - abriuEm
-                val saudavel = durou >= FLUXO_SAUDAVEL_MS
-                emitir("log_fluxo_caiu", mapOf(
-                    "linhas_lidas" to lidas.toString(),
-                    "durou_s" to (durou / 1000).toString(),
-                    "proxima_em_s" to ((if (saudavel) ESPERA_REABRIR_MS else espera) / 1000).toString()))
-                if (saudavel) {
-                    // Um fluxo que vinha funcionando e caiu: quase sempre e o Shizuku morrendo -
-                    // exatamente o que se investiga. So este caso vale como momento decisivo.
-                    marcarMomento("fluxo do log caiu depois de " + (durou / 1000) + " s")
-                    espera = ESPERA_REABRIR_MS
-                    Thread.sleep(ESPERA_REABRIR_MS)
-                } else {
-                    Thread.sleep(espera)
-                    espera = minOf(espera * 2, ESPERA_REABRIR_MAX_MS)
-                }
+                durou = System.currentTimeMillis() - abriuEm
+                saudavel = durou >= FLUXO_SAUDAVEL_MS
             } catch (e: InterruptedException) {
                 return
             } catch (e: Throwable) {
                 // Throwable: o defeito que se mede chega como OutOfMemoryError vindo do Shizuku.
+                falhou = true
                 Log.w(TAG, "coletor falhou", e)
                 // Registrado, e nao so no logcat: uma falha aqui antes so aparecia como ausencia de
                 // linhas, igual a um coletor saudavel e quieto. Mesmo erro repetido entra uma vez a
@@ -251,8 +246,27 @@ object ColetorDeLog {
                         "erro" to e.javaClass.simpleName,
                         "msg" to limpar(e.message ?: "").take(200)))
                 }
-                try { Thread.sleep(ESPERA_REABRIR_MS) } catch (i: InterruptedException) { return }
             }
+
+            // UMA espera so, decidida aqui, para os dois caminhos de falha. Antes o recuo valia
+            // apenas quando o fluxo TERMINAVA cedo; quando ele LANCAVA, dormia 15 s fixos e
+            // reabria - um processo novo no Shizuku a cada 15 s, para sempre. Foi o que aconteceu
+            // em campo com o EBADF: exatamente o vazamento que o recuo existia para impedir.
+            val dormir = if (saudavel) ESPERA_REABRIR_MS else espera
+            espera = if (saudavel) ESPERA_REABRIR_MS else minOf(espera * 2, ESPERA_REABRIR_MAX_MS)
+
+            if (!falhou) {
+                emitir("log_fluxo_caiu", mapOf(
+                    "linhas_lidas" to lidas.toString(),
+                    "durou_s" to (durou / 1000).toString(),
+                    "proxima_em_s" to (dormir / 1000).toString()))
+                if (saudavel) {
+                    // Um fluxo que vinha funcionando e caiu: quase sempre e o Shizuku morrendo -
+                    // exatamente o que se investiga. So este caso vale como momento decisivo.
+                    marcarMomento("fluxo do log caiu depois de " + (durou / 1000) + " s")
+                }
+            }
+            try { Thread.sleep(dormir) } catch (e: InterruptedException) { return }
         }
     }
 
@@ -280,7 +294,12 @@ object ColetorDeLog {
         try {
             try { processo.outputStream?.close() } catch (e: Exception) {}
             val pfd = processo.inputStream ?: return 0
-            BufferedReader(InputStreamReader(FileInputStream(pfd.fileDescriptor))).use { leitor ->
+            // AutoCloseInputStream, e nao FileInputStream(pfd.fileDescriptor). Extraindo so o
+            // numero do descritor, nada mais segurava o ParcelFileDescriptor, e o coletor de lixo o
+            // recolhia - FECHANDO o descritor no meio da leitura. Em campo isso deu EBADF 186 ms
+            // depois de abrir, em todo carro, e a 1.24 nunca capturou uma linha. O comando de uma
+            // vez so (rodarComandoShizuku) escapava por acaso: ele usa o pfd de novo no finally.
+            BufferedReader(InputStreamReader(android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd))).use { leitor ->
                 while (rodando) {
                     val linha = leitor.readLine() ?: break
                     lidas++
@@ -311,12 +330,16 @@ object ColetorDeLog {
             // mas nada e reconhecido como do Impulse.
             emitir("log_ativo", mapOf(
                 "lidas" to lidasTotal.toString(),
+                // reconhecidas baixo = o PADRAO nao casa; reconhecidas alto e do_impulse zero = o
+                // FILTRO nao casa. Sao consertos diferentes, e a 1.26 precisou dessa distincao.
+                "reconhecidas" to reconhecidasTotal.toString(),
                 "do_impulse" to doImpulseTotal.toString(),
                 "gravadas" to gravadasTotal.toString(),
                 "na_caixa" to synchronized(caixaPreta) { caixaPreta.size }.toString(),
                 "pids_impulse" to pidsImpulse.joinToString(",")))
         }
         val m = LINHA.find(bruta) ?: return false
+        reconhecidasTotal++
         val carimbo = m.groupValues[1]
         val uid = m.groupValues[2]
         val pid = m.groupValues[3]
@@ -399,10 +422,15 @@ object ColetorDeLog {
         return tamanhoConhecido >= LIMITE_ECONOMIA_BYTES
     }
 
+    /**
+     * Linha do Impulse: pelo uid, que nao muda quando ele reinicia, OU pelo pid.
+     *
+     * As duas vias de proposito. O uid e a principal, mas o formato dessa coluna ja surpreendeu uma
+     * vez; o pid, aprendido ao abrir o fluxo, segura o caso de uma surpresa nova.
+     */
     private fun ehDoImpulse(uid: String, pid: String): Boolean {
-        if (!semColunaDeUid && uid.isNotEmpty() && uidImpulse >= 0) {
-            return uid == uidImpulse.toString() || uid == nomeUidImpulse
-        }
+        if (uid.isNotEmpty() && uidImpulse >= 0 &&
+            (uid == uidImpulse.toString() || uid == nomeUidImpulse)) return true
         return pid in pidsImpulse
     }
 
