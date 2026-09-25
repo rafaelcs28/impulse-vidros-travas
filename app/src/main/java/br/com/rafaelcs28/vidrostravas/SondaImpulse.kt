@@ -69,7 +69,12 @@ object SondaImpulse {
         "closeWindowOnLock",
         "closeSunroofOnLock",
         "closeWindowsOnSpeed",
-        "closeSunroofOnSpeed"
+        "closeSunroofOnSpeed",
+        // A cortina do teto sai junto com o teto, mas por uma opcao PROPRIA e com 5 s de atraso
+        // (`closeSunRoof` agenda `closeSunRoofShade` num postDelayed). Sem esta chave na lista a
+        // captura mostra a cortina parada e nao sabe dizer se era para ela ter fechado. Repare no
+        // "R" maiusculo de SunRoof: o nome guardado difere do nome da variavel no Impulse.
+        "closeSunroofSunShadeOnCloseSunRoof"
     )
 
     /**
