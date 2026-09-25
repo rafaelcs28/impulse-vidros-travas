@@ -1046,7 +1046,7 @@ class CaptureService : Service() {
                 // `driving_ready_state=1`.
                 val alvo = alvoRecepcaoMs.get()
                 if (alvo != 0L && agora >= alvo && alvoRecepcaoMs.compareAndSet(alvo, 0L)) {
-                    val naPartida = SondaImpulse.recepcao("partida + 75 s", ignorarPiso = true)
+                    val naPartida = SondaImpulse.recepcao("conexao + 75 s", ignorarPiso = true)
                     if (naPartida.isNotEmpty()) anotar("recepcao", naPartida)
                 }
             } catch (e: InterruptedException) {
@@ -1134,6 +1134,12 @@ class CaptureService : Service() {
             registrar(servico, chaves)
             retrato(servico, chaves)
             estado = "capturando (" + chaves.size + " chaves)"
+            // Arma a leitura de recepcao tambem aqui, e nao so na mudanca de `driving_ready_state`.
+            // Na captura de 25/09 o gatilho da partida NAO disparou: depois da ignicao o aplicativo
+            // reconecta e o carro informa `ready=1` no RETRATO, que nao passa pelo ouvinte de
+            // mudancas. Conectar e, na pratica, o mesmo instante — e cobre tambem o carro que ja
+            // estava ligado quando o servico subiu.
+            alvoRecepcaoMs.set(System.currentTimeMillis() + ATRASO_RECEPCAO_PARTIDA_MS)
         } catch (e: Exception) {
             Log.e(TAG, "conexao falhou", e)
             estado = "falhou: " + (e.message ?: e.javaClass.simpleName)

@@ -42,6 +42,14 @@ object SondaImpulse {
     private const val PACOTE = "br.com.redesurftank.havalshisuku"
     private const val SERVICO_POOL = "com.beantechs.voice.adapter.VoiceAdapterService"
 
+    /**
+     * Pacote do servico de TECLAS da montadora — o do volante.
+     *
+     * Nao e binder registrado: o Impulse chega nele por `bindService` de um Intent
+     * `com.beantechs.inputservice.service_init`. Por isso a pergunta vai ao ActivityManager.
+     */
+    private const val PACOTE_INPUT = "com.beantechs.inputservice"
+
     /** Codigo do IVehicle dentro do IBinderPool da montadora, o mesmo que o Impulse pede. */
     private const val CODIGO_VEHICLE = 6
 
@@ -107,6 +115,9 @@ object SondaImpulse {
 
     @Volatile
     private var impulseNasceu = false
+
+    @Volatile
+    private var ultimoTamanhoLog = 0L
 
     /**
      * O Impulse nasceu de novo desde a ultima vez que perguntaram? Consome a marca.
@@ -305,28 +316,32 @@ object SondaImpulse {
 
         // '§' no lugar de cifrao, trocado no fim, como no script da fotografia das threads.
         //
-        // `timeout` so entra se existir nesta central: sem ele, um servico da montadora que trave
-        // no dump prenderia a thread que chamou — e quem chama e a mesma que atende o botao. O
-        // `-t 3` do dumpsys cobre o caso normal; o dumpsys pelado so e tentado quando o primeiro
-        // nao devolveu nada, que e o sintoma de a central nao conhecer a opcao.
+        // A rodada de descoberta da 1.31 respondeu duas coisas, e as duas mudaram este comando.
+        //
+        // 1. `dumpsys <servico>` NAO serve para nada da montadora: os quatro servicos dela que
+        //    aparecem no `service list` devolveram "sem_dump". E, pior, o servico que interessa nao
+        //    esta nessa lista: o Impulse NAO pega o IInputService por `ServiceManager.getService`,
+        //    ele faz `bindService` de um Intent `com.beantechs.inputservice.service_init` no pacote
+        //    `com.beantechs.inputservice`. Servico ligado por bind nao e binder registrado, entao
+        //    `service list` e `dumpsys <nome>` nunca o enxergariam.
+        //    Quem conhece as ligacoes de um servico ligado por bind e o ActivityManager:
+        //    `dumpsys activity services <pacote>` lista os ConnectionRecord com o cliente de cada
+        //    um. E ali que aparece se o Impulse esta ligado, e se sobrou ligacao de processo morto.
+        // 2. O log persistente do Impulse ESTA vivo e crescendo — 160.506 bytes as 07:04 e 179.797
+        //    as 07:13 do mesmo dia. Eu tinha descartado esse sinal por achar o arquivo esparso
+        //    demais; a medida desmentiu. Fica, e agora com o quanto cresceu desde a leitura
+        //    anterior, que e o que diz se o Impulse continua trabalhando.
         val script = """
             T="timeout 8"; command -v timeout >/dev/null 2>&1 || T=""
             P=§(pidof $PACOTE | cut -d' ' -f1)
             echo "pid=§P"
             LG=§(ls -t /sdcard/Android/data/$PACOTE/files/cluster-diagnostics/cluster-events-*.log 2>/dev/null | head -1)
             if [ -n "§LG" ]; then stat -c "log tam=%s mtime=%Y" "§LG" 2>/dev/null; else echo "log ausente"; fi
-            S=§(service list 2>/dev/null | grep -iE 'input|cluster|vehicle|beantechs' | awk '{print §2}' | tr -d ':' | head -8)
-            echo "servicos §(echo §S | tr '\n' ' ')"
-            for n in §S; do
-              D=§(§T dumpsys -t 3 §n 2>/dev/null | head -300)
-              if [ -z "§D" ]; then D=§(§T dumpsys §n 2>/dev/null | head -300); fi
-              if [ -z "§D" ]; then echo "svc §n sem_dump"; continue; fi
-              L=§(echo "§D" | wc -l | tr -d ' ')
-              M=§(echo "§D" | grep -c -i redesurftank)
-              C=§(echo "§D" | grep -c -iE 'listener|callback|client|observer')
-              echo "svc §n linhas=§L impulse=§M ouvintes=§C"
-              echo "§D" | grep -iE 'listener|callback|client|observer' | head -6 | sed "s|^|amostra §n |"
-            done
+            D=§(§T dumpsys activity services $PACOTE_INPUT 2>/dev/null | head -400)
+            if [ -z "§D" ]; then echo "ligacoes sem_dump"; else
+              echo "ligacoes linhas=§(echo "§D" | wc -l | tr -d ' ') impulse=§(echo "§D" | grep -c -i redesurftank) conexoes=§(echo "§D" | grep -c -i 'ConnectionRecord')"
+              echo "§D" | grep -iE 'ServiceRecord|ConnectionRecord|redesurftank|app=|ProcessRecord' | head -24 | sed "s|^|ligacao |"
+            fi
         """.trimIndent().replace('§', '$')
 
         val bruto = try {
@@ -342,23 +357,31 @@ object SondaImpulse {
         val saida = ColetorDeLog.limpar(bruto)
 
         val dados = linkedMapOf("motivo" to motivo)
-        val resumo = ArrayList<String>()
         val amostra = ArrayList<String>()
         for (linha in saida.lines()) {
             val texto = linha.trim()
             when {
                 texto.isEmpty() -> {}
                 texto.startsWith("pid=") -> dados["impulse_pid"] = texto.removePrefix("pid=")
-                texto.startsWith("log ") -> dados["log_persistente"] = texto.removePrefix("log ")
-                texto.startsWith("servicos ") -> dados["servicos"] = texto.removePrefix("servicos ").take(200)
-                texto.startsWith("svc ") -> resumo.add(texto.removePrefix("svc "))
-                texto.startsWith("amostra ") -> amostra.add(texto.removePrefix("amostra "))
+                texto.startsWith("log ") -> {
+                    val corpo = texto.removePrefix("log ")
+                    dados["log_persistente"] = corpo
+                    // Cresceu quanto desde a leitura anterior? E o que separa "o Impulse continua
+                    // trabalhando" de "o processo esta de pe e nao faz mais nada".
+                    val tam = Regex("tam=(\\d+)").find(corpo)?.groupValues?.get(1)?.toLongOrNull()
+                    if (tam != null) {
+                        val antes = ultimoTamanhoLog
+                        if (antes > 0L) dados["log_cresceu"] = (tam - antes).toString()
+                        ultimoTamanhoLog = tam
+                    }
+                }
+                texto.startsWith("ligacoes ") -> dados["ligacoes"] = texto.removePrefix("ligacoes ").take(200)
+                texto.startsWith("ligacao ") -> amostra.add(texto.removePrefix("ligacao "))
             }
         }
-        if (resumo.isNotEmpty()) dados["dumps"] = resumo.joinToString(" | ").take(400)
         // Teto no que e texto livre de outro processo: a amostra existe para ensinar o formato, nao
         // para ser o dump inteiro dentro da captura.
-        if (amostra.isNotEmpty()) dados["ouvintes"] = amostra.joinToString(" | ").take(1200)
+        if (amostra.isNotEmpty()) dados["conexoes"] = amostra.joinToString(" | ").take(1500)
         return dados
     }
 
