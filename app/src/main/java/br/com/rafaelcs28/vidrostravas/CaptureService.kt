@@ -99,6 +99,19 @@ class CaptureService : Service() {
          */
         private val momentoDecisivo = java.util.concurrent.atomic.AtomicBoolean(false)
 
+        /**
+         * Quando fazer a leitura de recepcao que segue a PARTIDA do carro (0 = nenhuma marcada).
+         *
+         * Em 25/09, no carro do dono, o volante ja estava morto tres minutos depois de o Impulse
+         * subir. A sonda de recepcao so olhava no instante decisivo — tranca e desligamento —, que e
+         * o fim do ciclo: chegaria tarde justamente no caso mais comum. A partida e um sinal de
+         * graca, que ja chega pelo canal de dados: o Impulse renasce a cada ignicao.
+         */
+        private val alvoRecepcaoMs = java.util.concurrent.atomic.AtomicLong(0L)
+
+        /** Espera entre a partida e a leitura: tempo de o Impulse subir e se registrar. */
+        private const val ATRASO_RECEPCAO_PARTIDA_MS = 75_000L
+
         /** Chaves cujo anuncio marca a hora de medir a atuacao. */
         private val GATILHOS_DE_SONDA = setOf(
             "car.basic.door_lock_status",
@@ -1020,6 +1033,21 @@ class CaptureService : Service() {
                     ateConfiguracao = agora
                     val config = SondaImpulse.configuracao()
                     if (config.isNotEmpty()) anotar("impulse_config", config)
+                    // A leitura da configuracao acabou de revelar um `impulse_desde` diferente: o
+                    // Impulse renasceu em algum momento desde a ultima volta. Pergunta agora quem
+                    // esta registrado, sem esperar o fim do ciclo.
+                    if (SondaImpulse.nasceuDeNovo()) {
+                        val nova = SondaImpulse.recepcao("Impulse renasceu", ignorarPiso = true)
+                        if (nova.isNotEmpty()) anotar("recepcao", nova)
+                    }
+                }
+
+                // Leitura marcada pela partida. Uma por ignicao: o alvo so e reposto no proximo
+                // `driving_ready_state=1`.
+                val alvo = alvoRecepcaoMs.get()
+                if (alvo != 0L && agora >= alvo && alvoRecepcaoMs.compareAndSet(alvo, 0L)) {
+                    val naPartida = SondaImpulse.recepcao("partida + 75 s", ignorarPiso = true)
+                    if (naPartida.isNotEmpty()) anotar("recepcao", naPartida)
                 }
             } catch (e: InterruptedException) {
                 return
@@ -1121,6 +1149,11 @@ class CaptureService : Service() {
                 if (key in GATILHOS_DE_SONDA) {
                     momentoDecisivo.set(true)
                     ColetorDeLog.marcarMomento("anuncio de " + key.substringAfterLast('.') + "=" + (value ?: ""))
+                    // Carro ficou pronto: o Impulse esta subindo agora. Marca a leitura de recepcao
+                    // para daqui a pouco, quando ele ja teve tempo de se registrar no carro.
+                    if (key == "car.basic.driving_ready_state" && value == "1") {
+                        alvoRecepcaoMs.set(System.currentTimeMillis() + ATRASO_RECEPCAO_PARTIDA_MS)
+                    }
                 }
                 // Grandeza analogica e o chassi inteiro nao entram nem no arquivo.
                 if (key in RUIDO) return

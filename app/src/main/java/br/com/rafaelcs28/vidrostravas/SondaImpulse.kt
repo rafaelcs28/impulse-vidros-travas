@@ -102,6 +102,26 @@ object SondaImpulse {
     @Volatile
     private var ultimaRecepcaoMs = 0L
 
+    @Volatile
+    private var ultimoImpulseDesde: String? = null
+
+    @Volatile
+    private var impulseNasceu = false
+
+    /**
+     * O Impulse nasceu de novo desde a ultima vez que perguntaram? Consome a marca.
+     *
+     * Existe porque em 25/09, no carro do dono, o volante ja estava morto TRES MINUTOS depois de o
+     * Impulse subir — nao e coisa que apodrece com o tempo, e o registro nascendo torto. O detector
+     * de processo novo do ColetorDeLog nao serve para isso: ele depende de o Impulse escrever no
+     * logcat, e o nosso fork apaga `android.util.Log`.
+     */
+    fun nasceuDeNovo(): Boolean {
+        if (!impulseNasceu) return false
+        impulseNasceu = false
+        return true
+    }
+
     /**
      * Uma rodada da sonda. Devolve o que mudou, ou vazio quando esta tudo igual ao anterior.
      *
@@ -227,6 +247,14 @@ object SondaImpulse {
         }
         if (dados.isEmpty()) return emptyMap()
 
+        // Processo novo do Impulse: guarda a marca para quem pergunta (`nasceuDeNovo`). Nao custa
+        // comando — sai de carona na leitura da configuracao, que ja traz o `impulse_desde`.
+        val desde = dados["impulse_desde"]
+        if (desde != null && desde != ultimoImpulseDesde) {
+            ultimoImpulseDesde = desde
+            impulseNasceu = true
+        }
+
         val assinatura = dados.entries.joinToString(";") { it.key + "=" + it.value }
         if (assinatura == ultimaConfiguracao) return emptyMap()
         ultimaConfiguracao = assinatura
@@ -267,9 +295,12 @@ object SondaImpulse {
      * instante decisivo (tranca/desligamento e o botao "o Impulse travou"), nunca em laco, e no
      * maximo uma vez a cada cinco minutos.
      */
-    fun recepcao(motivo: String): Map<String, String> {
+    fun recepcao(motivo: String, ignorarPiso: Boolean = false): Map<String, String> {
         val agora = System.currentTimeMillis()
-        if (agora - ultimaRecepcaoMs < ESPERA_RECEPCAO_MS) return emptyMap()
+        // O piso de 5 min segura a sonda periodica. Os gatilhos de evento — a partida e o Impulse
+        // renascendo — disparam UMA vez cada, e justamente na janela que interessa; segura-los
+        // faria a medida chegar tarde no caso mais comum.
+        if (!ignorarPiso && agora - ultimaRecepcaoMs < ESPERA_RECEPCAO_MS) return emptyMap()
         ultimaRecepcaoMs = agora
 
         // '§' no lugar de cifrao, trocado no fim, como no script da fotografia das threads.
