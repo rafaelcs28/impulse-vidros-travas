@@ -119,6 +119,9 @@ object SondaImpulse {
     @Volatile
     private var ultimoTamanhoLog = 0L
 
+    @Volatile
+    private var ultimoPidVisto: String? = null
+
     /**
      * O Impulse nasceu de novo desde a ultima vez que perguntaram? Consome a marca.
      *
@@ -127,6 +130,12 @@ object SondaImpulse {
      * de processo novo do ColetorDeLog nao serve para isso: ele depende de o Impulse escrever no
      * logcat, e o nosso fork apaga `android.util.Log`.
      */
+    /** Ultimo pid do Impulse que a leitura de configuracao viu. Para o cabecalho de continuacao. */
+    fun pidConhecido(): String? = ultimoPidVisto
+
+    /** Ultimo `impulse_desde` visto. Diz, no trecho novo, se o processo e o mesmo de antes. */
+    fun desdeConhecido(): String? = ultimoImpulseDesde
+
     fun nasceuDeNovo(): Boolean {
         if (!impulseNasceu) return false
         impulseNasceu = false
@@ -260,6 +269,7 @@ object SondaImpulse {
 
         // Processo novo do Impulse: guarda a marca para quem pergunta (`nasceuDeNovo`). Nao custa
         // comando — sai de carona na leitura da configuracao, que ja traz o `impulse_desde`.
+        dados["impulse_pid"]?.let { ultimoPidVisto = it }
         val desde = dados["impulse_desde"]
         if (desde != null && desde != ultimoImpulseDesde) {
             ultimoImpulseDesde = desde

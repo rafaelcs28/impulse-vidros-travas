@@ -40,6 +40,23 @@ class CaptureService : Service() {
     private var enviando = true
 
     private lateinit var arquivo: File
+
+    /**
+     * Ate que byte do arquivo ja foi ENTREGUE e confirmado.
+     *
+     * Existe porque 74% de tudo o que ja subiu era historico repetido: medido em 25/09 sobre o
+     * acervo inteiro, 14,6 MB de reenvio em 19,8 MB enviados. Um carro chegou a mandar quatro vezes
+     * o mesmo arquivo de 49.656 bytes sem UM byte novo, e um envio de 1.615.698 bytes carregou
+     * 1.672 bytes de novidade. O arquivo local continua inteiro — ele e o registro do dono e e de
+     * onde sai o contexto —, mas o que sobe e so o trecho novo.
+     *
+     * A marca so avanca com o envio CONFIRMADO. Se falhar (cota, rede do carro), o trecho fica
+     * pendente e vai junto no proximo; senao um envio que nao chegou viraria evento perdido.
+     */
+    @Volatile
+    private var enviadoAte: Long = 0L
+
+    private lateinit var marcaDeEnvio: File
     private val travaDoArquivo = Any()
 
     /**
@@ -587,6 +604,15 @@ class CaptureService : Service() {
     override fun onCreate() {
         super.onCreate()
         arquivo = arquivoDe(this)
+        marcaDeEnvio = File(filesDir, "enviado-ate.txt")
+        enviadoAte = try {
+            if (marcaDeEnvio.exists()) marcaDeEnvio.readText().trim().toLongOrNull() ?: 0L else 0L
+        } catch (e: Throwable) {
+            0L
+        }
+        // O arquivo encolheu (limpeza, ou instalacao que levou o registro junto) e a marca ficou
+        // apontando para depois do fim: recomeca do zero em vez de nao enviar nada.
+        if (enviadoAte > arquivo.length()) enviadoAte = 0L
         // O arquivo vive no disco e o contador vivia so na memoria. Toda partida do carro a tela
         // voltava dizendo "0 eventos" sobre uma captura de dias, e quem esta ajudando de longe
         // concluiria que a noite inteira se perdeu - e poderia apagar de verdade, pelo botao
@@ -657,6 +683,7 @@ class CaptureService : Service() {
                         guardado = subirParaGitHub(arquivo, etiqueta + "/antes-de-limpar")
                     }
                     arquivo.delete()
+                    gravarMarca(0L)
                     eventos = 0
                     ultimos = emptyList()
                     envioAlvo = 0
@@ -697,11 +724,22 @@ class CaptureService : Service() {
                 } catch (e: Throwable) {
                     Log.w(TAG, "despejo antes do envio falhou", e)
                 }
-                envioAlvo = if (arquivo.exists()) arquivo.length().toInt() else 0
+                val tamanho = if (arquivo.exists()) arquivo.length() else 0L
+                if (enviadoAte > tamanho) enviadoAte = 0L
+                // O trecho comeca onde o anterior terminou. `recortar` devolve null quando nao ha
+                // novidade, e ai o envio se resolve sem tocar na rede.
+                val trecho = try {
+                    recortar(enviadoAte, tamanho)
+                } catch (e: Throwable) {
+                    Log.w(TAG, "nao consegui recortar o trecho novo", e)
+                    null
+                }
+                envioAlvo = (trecho?.length() ?: 0L).toInt()
                 envioAtivo = true
-                if (envioAlvo == 0) {
+                if (trecho == null || envioAlvo == 0) {
                     envioAtivo = false
                     envioConcluidoEm = System.currentTimeMillis()
+                    if (tamanho > 0L && enviadoAte >= tamanho) envioFeito = 0
                     continue
                 }
 
@@ -712,16 +750,19 @@ class CaptureService : Service() {
                 // GitHub primeiro: la o registro fica guardado e privado. O canal publico so entra
                 // se nao houver credencial, e a cota diaria dele ja mostrou que nao da conta.
                 val nome = "captura-" + etiqueta + ".ndjson"
-                var erro = subirParaGitHub(arquivo, etiqueta)
+                var erro = subirParaGitHub(trecho, etiqueta)
                 if (erro != null && BuildConfig.GITHUB_TOKEN.isEmpty()) {
-                    erro = subirArquivo(arquivo, nome) { enviados -> envioFeito = enviados }
+                    erro = subirArquivo(trecho, nome) { enviados -> envioFeito = enviados }
                 }
                 if (erro == null) {
                     envioFeito = envioAlvo
+                    // So aqui a marca anda: confirmado o envio, aquele trecho nao volta.
+                    gravarMarca(tamanho)
                 } else {
                     envioFalha = erro
                     envioRecusas++
                 }
+                trecho.delete()
                 envioAtivo = false
                 envioConcluidoEm = System.currentTimeMillis()
             } catch (e: InterruptedException) {
@@ -732,6 +773,97 @@ class CaptureService : Service() {
                 envioAtivo = false
                 try { Thread.sleep(2000) } catch (i: InterruptedException) { return }
             }
+        }
+    }
+
+    /** Guarda o ponto ja entregue. Em disco: a marca tem de sobreviver a partida seguinte. */
+    private fun gravarMarca(ate: Long) {
+        enviadoAte = ate
+        try {
+            marcaDeEnvio.writeText(ate.toString())
+        } catch (e: Throwable) {
+            // Sem a marca em disco o proximo envio repete o trecho. Repetir e chato; perder, nao.
+            Log.w(TAG, "nao consegui guardar a marca de envio", e)
+        }
+    }
+
+    /**
+     * Recorta o que ainda nao foi entregue, com um cabecalho que faz o trecho se ler sozinho.
+     *
+     * Um capitulo que comeca no meio de uma viagem nao se entende: sem saber de que carro e, de que
+     * processo do Impulse e de onde veio, as mudancas seguintes nao tem contra o que ser lidas. Por
+     * isso o `continuacao` na frente — e por isso o arquivo LOCAL continua inteiro, que e de onde
+     * esse contexto sai.
+     *
+     * Devolve null quando nao ha novidade.
+     */
+    private fun recortar(desde: Long, ate: Long): File? {
+        if (ate <= 0L) return null
+        val inicio = alinharNaLinha(desde, ate)
+        if (inicio >= ate) return null
+
+        val parcial = File(filesDir, "parcial.ndjson")
+        parcial.delete()
+        val agora = System.currentTimeMillis()
+        val cabecalho = StringBuilder()
+        if (inicio > 0L) {
+            // So no trecho de continuacao: o primeiro envio ja comeca pelo `carro` e pelo retrato.
+            val d = linkedMapOf(
+                "carro" to etiqueta,
+                "t" to SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(agora)),
+                "ms" to agora.toString(),
+                "tipo" to "continuacao",
+                "desde_byte" to inicio.toString(),
+                "ate_byte" to ate.toString(),
+                "impulse_pid" to (SondaImpulse.pidConhecido() ?: "?"),
+                "impulse_desde" to (SondaImpulse.desdeConhecido() ?: "?")
+            )
+            cabecalho.append(d.entries.joinToString(", ", "{", "}") {
+                "\"" + it.key + "\": \"" + it.value.replace("\"", "'") + "\""
+            }).append('\n')
+        }
+
+        parcial.outputStream().use { saida ->
+            if (cabecalho.isNotEmpty()) saida.write(cabecalho.toString().toByteArray(Charsets.UTF_8))
+            java.io.RandomAccessFile(arquivo, "r").use { raf ->
+                raf.seek(inicio)
+                val buffer = ByteArray(64 * 1024)
+                var falta = ate - inicio
+                while (falta > 0L) {
+                    val pedir = if (falta < buffer.size) falta.toInt() else buffer.size
+                    val lidos = raf.read(buffer, 0, pedir)
+                    if (lidos <= 0) break
+                    saida.write(buffer, 0, lidos)
+                    falta -= lidos
+                }
+            }
+        }
+        return if (parcial.length() > 0L) parcial else null
+    }
+
+    /**
+     * Empurra o corte ate depois da proxima quebra de linha.
+     *
+     * A marca sempre nasce de um `length()` tirado entre escritas, entao deveria cair certo. Mas um
+     * corte no meio de uma linha produz um JSON quebrado na primeira linha do trecho — e quem le do
+     * outro lado descarta a linha e nunca sabe por que. Um byte de conferencia sai barato.
+     */
+    private fun alinharNaLinha(desde: Long, ate: Long): Long {
+        if (desde <= 0L) return 0L
+        return try {
+            java.io.RandomAccessFile(arquivo, "r").use { raf ->
+                if (desde >= ate) return desde
+                raf.seek(desde - 1)
+                if (raf.read() == '\n'.code) return desde
+                var p = desde
+                while (p < ate) {
+                    if (raf.read() == '\n'.code) return p + 1
+                    p++
+                }
+                ate
+            }
+        } catch (e: Throwable) {
+            desde
         }
     }
 
