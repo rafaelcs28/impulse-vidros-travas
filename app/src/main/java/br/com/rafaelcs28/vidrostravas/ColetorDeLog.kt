@@ -75,6 +75,25 @@ object ColetorDeLog {
     // Fora de proposito: "vehicle", "binder" e "error" aparecem em linha demais do Impulse e
     // gastariam o teto com ruido. Erro de verdade ja entra pelo nivel (E/F), sem precisar da palavra.
 
+    /**
+     * Projecao: Android Auto e CarPlay, mais os subsistemas por onde os defeitos deles aparecem.
+     *
+     * ⚠️ So entram em nivel W, E ou F. Sem essa regra a projecao afoga o coletor: o teto por minuto
+     * ja descarta centenas de linhas neste aparelho. Aviso e erro sao poucos e sao onde o defeito
+     * se manifesta — queda e reconexao aparecem no ActivityManager, tela preta e imagem travada no
+     * Adreno/SurfaceFlinger (a linha `timeline inc is invalid` ja apareceu em dois carros), audio no
+     * AudioFlinger, e o pareamento no Bluetooth.
+     */
+    private val PROJECAO = listOf(
+        "com.ts.androidauto", "com.ts.carplay", "androidauto", "carplay", "aap",
+        "adreno", "surfaceflinger", "openglrenderer",
+        "audioflinger", "audiotrack", "audiofocus",
+        "bluetooth", "bt_stack", "bond"
+    )
+
+    /** Niveis que a projecao pode gravar. Conjunto, nao string: `"" in "WEF"` seria verdadeiro. */
+    private val NIVEIS_PROJECAO = setOf("W", "E", "F")
+
     /** Tags do sistema que contam quando um processo nasce, morre ou e morto. */
     private val TAGS_SISTEMA = setOf(
         "ActivityManager", "ActivityTaskManager", "lowmemorykiller", "libprocessgroup", "Zygote"
@@ -358,9 +377,13 @@ object ColetorDeLog {
 
         val doShizuku = "shizuku" in tagMinuscula
         val doSistema = tag in TAGS_SISTEMA &&
-            (PACOTE in msg || "shizuku" in msgMinuscula)
+            (PACOTE in msg || "shizuku" in msgMinuscula ||
+                PROJECAO.any { it in msgMinuscula })
+        // Projecao so em aviso e erro, e de qualquer processo — o host do Android Auto nao e o
+        // Impulse, entao o filtro por uid nunca o pegaria. Ver a lista PROJECAO para o porque.
+        val doProjecao = nivel in NIVEIS_PROJECAO && PROJECAO.any { it in tagMinuscula || it in msgMinuscula }
 
-        if (!doImpulse && !doShizuku && !doSistema) return true
+        if (!doImpulse && !doShizuku && !doSistema && !doProjecao) return true
         if (doImpulse) doImpulseTotal++
 
         // O Impulse reiniciou: e o momento em que o estado velho some ou nao some.
@@ -391,7 +414,8 @@ object ColetorDeLog {
         )
 
         val critico = !doImpulse || nivel == "E" || nivel == "F"
-        val sempre = critico || PALAVRAS.any { it in msgMinuscula || it in tagMinuscula }
+        val sempre = critico || doProjecao ||
+            PALAVRAS.any { it in msgMinuscula || it in tagMinuscula }
         val agora = System.currentTimeMillis()
 
         if (emEconomia() && !critico) {

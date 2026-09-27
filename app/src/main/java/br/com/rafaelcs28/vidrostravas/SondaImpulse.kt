@@ -50,6 +50,20 @@ object SondaImpulse {
      */
     private const val PACOTE_INPUT = "com.beantechs.inputservice"
 
+    /**
+     * Os aplicativos de PROJECAO da central: Android Auto e CarPlay.
+     *
+     * Entram porque o testador do 944020 queixou "Android Auto instavel" e a captura nao tinha UMA
+     * linha sobre isso — das 60 linhas de log do arquivo dele, todas eram `Parcel`. O que ja dava
+     * para ver era indireto: a lista de clientes do servico de teclas mostrava `com.ts.androidauto`
+     * presente numa sessao (19:24-19:46) e ausente na outra (22:40-22:56).
+     */
+    private val PACOTES_PROJECAO = listOf(
+        "com.ts.androidauto",
+        "com.ts.androidauto.app",
+        "com.ts.carplay.app"
+    )
+
     /** Codigo do IVehicle dentro do IBinderPool da montadora, o mesmo que o Impulse pede. */
     private const val CODIGO_VEHICLE = 6
 
@@ -352,7 +366,16 @@ object SondaImpulse {
               echo "ligacoes linhas=§(echo "§D" | wc -l | tr -d ' ') impulse=§(echo "§D" | grep -c -i redesurftank) conexoes=§(echo "§D" | grep -c -i 'ConnectionRecord')"
               echo "§D" | grep -iE 'ServiceRecord|ConnectionRecord|redesurftank|app=|ProcessRecord' | head -24 | sed "s|^|ligacao |"
             fi
-        """.trimIndent().replace('§', '$')
+            for a in PACOTES_SH; do
+              PP=§(pidof §a | cut -d' ' -f1)
+              if [ -z "§PP" ]; then echo "projecao §a parado"; else
+                echo "projecao §a pid=§PP §(stat -c 'desde=%Y' /proc/§PP 2>/dev/null)"
+              fi
+            done
+            A=§(§T dumpsys activity activities 2>/dev/null | grep -iE 'ts\.androidauto|ts\.carplay|mResumedActivity|mFocusedApp' | head -12)
+            if [ -n "§A" ]; then echo "§A" | sed "s|^|tela |"; fi
+            if [ -n "§LG" ]; then echo "--- rabo do log ---"; tail -c 6000 "§LG" 2>/dev/null | sed "s|^|impulselog |"; fi
+        """.trimIndent().replace('§', '$').replace("PACOTES_SH", PACOTES_PROJECAO.joinToString(" "))
 
         val bruto = try {
             CaptureService.rodarComandoShizuku(arrayOf("sh", "-c", script))
@@ -368,6 +391,9 @@ object SondaImpulse {
 
         val dados = linkedMapOf("motivo" to motivo)
         val amostra = ArrayList<String>()
+        val projecao = ArrayList<String>()
+        val tela = ArrayList<String>()
+        val rabo = ArrayList<String>()
         for (linha in saida.lines()) {
             val texto = linha.trim()
             when {
@@ -387,11 +413,22 @@ object SondaImpulse {
                 }
                 texto.startsWith("ligacoes ") -> dados["ligacoes"] = texto.removePrefix("ligacoes ").take(200)
                 texto.startsWith("ligacao ") -> amostra.add(texto.removePrefix("ligacao "))
+                texto.startsWith("projecao ") -> projecao.add(texto.removePrefix("projecao "))
+                texto.startsWith("tela ") -> tela.add(texto.removePrefix("tela "))
+                texto.startsWith("impulselog ") -> rabo.add(texto.removePrefix("impulselog "))
             }
         }
         // Teto no que e texto livre de outro processo: a amostra existe para ensinar o formato, nao
         // para ser o dump inteiro dentro da captura.
         if (amostra.isNotEmpty()) dados["conexoes"] = amostra.joinToString(" | ").take(1500)
+        // Projecao: quem esta de pe e ha quanto tempo. "parado" tambem e resposta — foi assim que
+        // apareceu o Android Auto ausente numa sessao e presente na outra, no mesmo carro.
+        if (projecao.isNotEmpty()) dados["projecao"] = projecao.joinToString(" | ").take(400)
+        // Qual atividade esta na frente: separa "tela preta com o AA rodando" de "AA nem subiu".
+        if (tela.isNotEmpty()) dados["tela"] = tela.joinToString(" | ").take(600)
+        // O relato do PROPRIO Impulse. E o unico lugar onde ele conta o que viu: o fork apaga o
+        // `android.util.Log`, entao o logcat dele vem vazio e este arquivo e o que sobra.
+        if (rabo.isNotEmpty()) dados["impulse_log"] = rabo.joinToString("\n").takeLast(4000)
         return dados
     }
 
