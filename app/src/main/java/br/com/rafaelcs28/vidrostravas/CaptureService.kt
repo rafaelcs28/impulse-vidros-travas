@@ -1016,7 +1016,14 @@ class CaptureService : Service() {
                 // proposito: a foto e a que perde valor se o Impulse reiniciar no meio.
                 fotoPasso = "conferindo quem ainda recebe do carro..."
                 try {
-                    val recepcao = SondaImpulse.recepcao("Impulse travado, marcado pelo botao")
+                    // ignorarPiso: o botao laranja e UM toque de gente no instante do defeito — o
+                    // piso de 5 min nao tem o que proteger aqui, e engoliu a medida duas vezes
+                    // (25/09 e 28/09, as duas a menos de 2 min de uma leitura anterior). Justamente
+                    // o momento que interessa era o que nao era medido.
+                    val recepcao = SondaImpulse.recepcao(
+                        "Impulse travado, marcado pelo botao",
+                        ignorarPiso = true
+                    )
                     if (recepcao.isNotEmpty()) anotar("recepcao", recepcao)
                 } catch (e: Throwable) {
                     Log.w(TAG, "sonda de recepcao falhou no botao", e)

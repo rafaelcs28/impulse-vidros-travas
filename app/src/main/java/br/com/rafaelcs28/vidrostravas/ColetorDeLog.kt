@@ -94,6 +94,16 @@ object ColetorDeLog {
     /** Niveis que a projecao pode gravar. Conjunto, nao string: `"" in "WEF"` seria verdadeiro. */
     private val NIVEIS_PROJECAO = setOf("W", "E", "F")
 
+    /**
+     * Tags que entram em QUALQUER nivel, inclusive D e I.
+     *
+     * `BeanInputService` e o servico de TECLAS da montadora — o que despacha o volante. Na captura
+     * de 28/09 ele nao tinha uma linha na janela do defeito, mas so guardamos W/E/F: um log de
+     * despacho em D ou I seria invisivel. E a unica tag que pode dizer se a tecla chegou a ser
+     * entregue ao Impulse ou nem foi tentada. Volume e pequeno: e por toque de gente.
+     */
+    private val TAGS_SEM_FILTRO_DE_NIVEL = setOf("BeanInputService")
+
     /** Tags do sistema que contam quando um processo nasce, morre ou e morto. */
     private val TAGS_SISTEMA = setOf(
         "ActivityManager", "ActivityTaskManager", "lowmemorykiller", "libprocessgroup", "Zygote"
@@ -381,7 +391,8 @@ object ColetorDeLog {
                 PROJECAO.any { it in msgMinuscula })
         // Projecao so em aviso e erro, e de qualquer processo — o host do Android Auto nao e o
         // Impulse, entao o filtro por uid nunca o pegaria. Ver a lista PROJECAO para o porque.
-        val doProjecao = nivel in NIVEIS_PROJECAO && PROJECAO.any { it in tagMinuscula || it in msgMinuscula }
+        val doProjecao = (nivel in NIVEIS_PROJECAO || tag in TAGS_SEM_FILTRO_DE_NIVEL) &&
+            (tag in TAGS_SEM_FILTRO_DE_NIVEL || PROJECAO.any { it in tagMinuscula || it in msgMinuscula })
 
         if (!doImpulse && !doShizuku && !doSistema && !doProjecao) return true
         if (doImpulse) doImpulseTotal++
