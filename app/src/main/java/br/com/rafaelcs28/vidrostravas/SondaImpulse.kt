@@ -380,7 +380,7 @@ object SondaImpulse {
               # arquivo inteiro. `grep -o` com o carimbo na frente recorta registro a registro, e o
               # {0,8} impede que um casamento corra ate o fim do arquivo.
               grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}[^ ]* -0300 epochMs=[0-9]+ elapsedMs=[0-9]+ event=[a-zA-Z_]+( [a-zA-Z]+=[^ ]+){0,8}' "§LG" 2>/dev/null \
-                | grep -iE 'patch|projection|cluster_|aa_|carplay' | tail -30 | sed "s|^|impulseevt |"
+                | grep -iE 'patch|projection|cluster_|aa_|carplay|scene' | tail -30 | sed "s|^|impulseevt |"
             fi
         """.trimIndent().replace('§', '$').replace("PACOTES_SH", PACOTES_PROJECAO.joinToString(" "))
 

@@ -25,8 +25,8 @@ android {
         // seguintes, que nao ajudam em nada aqui e so atrapalhariam a captura.
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
-        versionCode = 37
-        versionName = "1.36"
+        versionCode = 38
+        versionName = "1.37"
 
         buildConfigField("String", "GITHUB_TOKEN",
             "\"" + (credenciais.getProperty("github.token") ?: "") + "\"")
