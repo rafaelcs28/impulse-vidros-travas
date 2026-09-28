@@ -374,7 +374,14 @@ object SondaImpulse {
             done
             A=§(§T dumpsys activity activities 2>/dev/null | grep -iE 'ts\.androidauto|ts\.carplay|mResumedActivity|mFocusedApp' | head -12)
             if [ -n "§A" ]; then echo "§A" | sed "s|^|tela |"; fi
-            if [ -n "§LG" ]; then echo "--- rabo do log ---"; tail -c 6000 "§LG" 2>/dev/null | sed "s|^|impulselog |"; fi
+            if [ -n "§LG" ]; then
+              tail -c 6000 "§LG" 2>/dev/null | sed "s|^|impulselog |"
+              # O arquivo e UMA linha so (o separador nao e \n), entao `grep` normal devolveria o
+              # arquivo inteiro. `grep -o` com o carimbo na frente recorta registro a registro, e o
+              # {0,8} impede que um casamento corra ate o fim do arquivo.
+              grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}[^ ]* -0300 epochMs=[0-9]+ elapsedMs=[0-9]+ event=[a-zA-Z_]+( [a-zA-Z]+=[^ ]+){0,8}' "§LG" 2>/dev/null \
+                | grep -iE 'patch|projection|cluster_|aa_|carplay' | tail -30 | sed "s|^|impulseevt |"
+            fi
         """.trimIndent().replace('§', '$').replace("PACOTES_SH", PACOTES_PROJECAO.joinToString(" "))
 
         val bruto = try {
@@ -394,6 +401,7 @@ object SondaImpulse {
         val projecao = ArrayList<String>()
         val tela = ArrayList<String>()
         val rabo = ArrayList<String>()
+        val eventos = ArrayList<String>()
         for (linha in saida.lines()) {
             val texto = linha.trim()
             when {
@@ -416,6 +424,7 @@ object SondaImpulse {
                 texto.startsWith("projecao ") -> projecao.add(texto.removePrefix("projecao "))
                 texto.startsWith("tela ") -> tela.add(texto.removePrefix("tela "))
                 texto.startsWith("impulselog ") -> rabo.add(texto.removePrefix("impulselog "))
+                texto.startsWith("impulseevt ") -> eventos.add(texto.removePrefix("impulseevt "))
             }
         }
         // Teto no que e texto livre de outro processo: a amostra existe para ensinar o formato, nao
@@ -429,6 +438,9 @@ object SondaImpulse {
         // O relato do PROPRIO Impulse. E o unico lugar onde ele conta o que viu: o fork apaga o
         // `android.util.Log`, entao o logcat dele vem vazio e este arquivo e o que sobra.
         if (rabo.isNotEmpty()) dados["impulse_log"] = rabo.joinToString("\n").takeLast(4000)
+        // Os eventos que interessam, recortados de QUALQUER ponto do arquivo — o rabo de 6 KB pega
+        // so o fim, e a sequencia de boot (que e onde o defeito mora) ja tinha saido dele.
+        if (eventos.isNotEmpty()) dados["impulse_eventos"] = eventos.joinToString(" | ").takeLast(2500)
         return dados
     }
 
