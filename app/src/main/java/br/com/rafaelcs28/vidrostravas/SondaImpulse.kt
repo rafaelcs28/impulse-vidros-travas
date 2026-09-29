@@ -379,8 +379,16 @@ object SondaImpulse {
               # O arquivo e UMA linha so (o separador nao e \n), entao `grep` normal devolveria o
               # arquivo inteiro. `grep -o` com o carimbo na frente recorta registro a registro, e o
               # {0,8} impede que um casamento corra ate o fim do arquivo.
-              grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}[^ ]* -0300 epochMs=[0-9]+ elapsedMs=[0-9]+ event=[a-zA-Z_]+( [a-zA-Z]+=[^ ]+){0,8}' "§LG" 2>/dev/null \
-                | grep -iE 'patch|projection|cluster_|aa_|carplay|scene' | tail -30 | sed "s|^|impulseevt |"
+              #
+              # `tail -c` ANTES do grep, e nao o arquivo direto: no carro 910775 este log chegou a
+              # 21.529.929 bytes NUMA LINHA SO, e varrer isso pelo Shizuku derrubou o servidor dele
+              # (quatro OutOfMemoryError, heap de 100 MB). Os ultimos 30 eventos nunca estao a mais
+              # de alguns KB do fim, entao o arquivo inteiro nunca foi preciso. O primeiro recorte
+              # sai cortado no meio de um registro; o carimbo na frente do padrao descarta esse
+              # pedaco sozinho.
+              tail -c 262144 "§LG" 2>/dev/null \
+                | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}[^ ]* -0300 epochMs=[0-9]+ elapsedMs=[0-9]+ event=[a-zA-Z_]+( [a-zA-Z]+=[^ ]+){0,8}' 2>/dev/null \
+                | grep -iE 'patch|projection|cluster_|aa_|carplay|scene|control_channel|binder' | tail -30 | sed "s|^|impulseevt |"
             fi
         """.trimIndent().replace('§', '$').replace("PACOTES_SH", PACOTES_PROJECAO.joinToString(" "))
 
